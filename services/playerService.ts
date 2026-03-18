@@ -1,0 +1,28 @@
+export default async function playerService() {
+  const trackPlayerModule = require('react-native-track-player') as typeof import('react-native-track-player');
+  const { default: TrackPlayer, Event } = trackPlayerModule;
+
+  TrackPlayer.addEventListener(Event.RemotePlay, () => {
+    TrackPlayer.play();
+  });
+
+  TrackPlayer.addEventListener(Event.RemotePause, () => {
+    TrackPlayer.pause();
+  });
+
+  TrackPlayer.addEventListener(Event.RemoteNext, () => {
+    TrackPlayer.skipToNext();
+  });
+
+  TrackPlayer.addEventListener(Event.RemotePrevious, () => {
+    TrackPlayer.skipToPrevious();
+  });
+
+  TrackPlayer.addEventListener(Event.RemoteStop, () => {
+    TrackPlayer.stop();
+  });
+
+  TrackPlayer.addEventListener(Event.RemoteSeek, (event) => {
+    TrackPlayer.seekTo(event.position);
+  });
+}
