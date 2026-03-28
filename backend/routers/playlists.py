@@ -68,7 +68,7 @@ async def create_playlist(
 ):
     supabase = get_supabase()
     payload = {
-        "user_id": user["id"],
+        "user_id": user["user_id"],
         "name": body.name,
         "description": body.description or "",
     }
@@ -86,7 +86,7 @@ async def list_playlists(user: dict = Depends(get_current_user)):
     result = (
         supabase.table("playlists")
         .select("*")
-        .eq("user_id", user["id"])
+        .eq("user_id", user["user_id"])
         .order("updated_at", desc=True)
         .execute()
     )
@@ -95,7 +95,7 @@ async def list_playlists(user: dict = Depends(get_current_user)):
 
 @router.get("/{playlist_id}", response_model=PlaylistResponse)
 async def get_playlist(playlist_id: str, user: dict = Depends(get_current_user)):
-    return _fetch_playlist_with_songs(playlist_id, user["id"])
+    return _fetch_playlist_with_songs(playlist_id, user["user_id"])
 
 
 @router.put("/{playlist_id}", response_model=PlaylistResponse)
@@ -104,7 +104,7 @@ async def update_playlist(
     body: PlaylistUpdateRequest,
     user: dict = Depends(get_current_user),
 ):
-    _get_owned_playlist_or_404(playlist_id, user["id"])
+    _get_owned_playlist_or_404(playlist_id, user["user_id"])
 
     payload = body.model_dump(exclude_none=True)
     if not payload:
@@ -116,21 +116,21 @@ async def update_playlist(
         supabase.table("playlists")
         .update(payload)
         .eq("id", playlist_id)
-        .eq("user_id", user["id"])
+        .eq("user_id", user["user_id"])
         .execute()
     )
 
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to update playlist.")
 
-    return _fetch_playlist_with_songs(playlist_id, user["id"])
+    return _fetch_playlist_with_songs(playlist_id, user["user_id"])
 
 
 @router.delete("/{playlist_id}", response_model=MessageResponse)
 async def delete_playlist(playlist_id: str, user: dict = Depends(get_current_user)):
-    _get_owned_playlist_or_404(playlist_id, user["id"])
+    _get_owned_playlist_or_404(playlist_id, user["user_id"])
     supabase = get_supabase()
-    supabase.table("playlists").delete().eq("id", playlist_id).eq("user_id", user["id"]).execute()
+    supabase.table("playlists").delete().eq("id", playlist_id).eq("user_id", user["user_id"]).execute()
     return {"message": "Playlist deleted."}
 
 
@@ -140,7 +140,7 @@ async def add_song_to_playlist(
     body: AddSongToPlaylistRequest,
     user: dict = Depends(get_current_user),
 ):
-    _get_owned_playlist_or_404(playlist_id, user["id"])
+    _get_owned_playlist_or_404(playlist_id, user["user_id"])
     supabase = get_supabase()
 
     pos_result = (
@@ -178,7 +178,7 @@ async def remove_song_from_playlist(
     song_id: str,
     user: dict = Depends(get_current_user),
 ):
-    _get_owned_playlist_or_404(playlist_id, user["id"])
+    _get_owned_playlist_or_404(playlist_id, user["user_id"])
     supabase = get_supabase()
     supabase.table("playlist_songs").delete().eq("playlist_id", playlist_id).eq("song_id", song_id).execute()
     supabase.table("playlists").update({"updated_at": _utc_now_iso()}).eq("id", playlist_id).execute()
@@ -191,7 +191,7 @@ async def reorder_playlist_songs(
     body: ReorderPlaylistSongsRequest,
     user: dict = Depends(get_current_user),
 ):
-    _get_owned_playlist_or_404(playlist_id, user["id"])
+    _get_owned_playlist_or_404(playlist_id, user["user_id"])
     supabase = get_supabase()
 
     existing_rows = (
