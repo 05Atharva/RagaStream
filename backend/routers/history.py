@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from auth import get_current_user
 from db import get_supabase
@@ -47,6 +47,7 @@ def _trim_history(user_id: str) -> None:
 @router.post("/", response_model=MessageResponse, status_code=201)
 async def record_history(
     body: HistoryRequest,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
@@ -64,7 +65,7 @@ async def record_history(
         next_play_count = int(song_result.data.get("play_count") or 0) + 1
         supabase.table("songs").update({"play_count": next_play_count}).eq("id", body.song_id).execute()
 
-    _trim_history(user["user_id"])
+    background_tasks.add_task(_trim_history, user["user_id"])
     return {"message": "Play history recorded."}
 
 

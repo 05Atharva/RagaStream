@@ -66,7 +66,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 app.include_router(songs.router,        prefix="/songs",  tags=["Songs"])
-app.include_router(songs.genres_router,               tags=["Songs"])
+app.include_router(songs.genres_router, prefix="/genres", tags=["Songs"])
 app.include_router(youtube.router,   prefix="/youtube",   tags=["YouTube"])
 app.include_router(playlists.router, prefix="/playlists", tags=["Playlists"])
 app.include_router(liked.router,     prefix="/liked",     tags=["Liked"])

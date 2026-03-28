@@ -28,7 +28,7 @@ async def like_song(
         )
         .execute()
     )
-    if result.data is None:
+    if result is None:
         raise HTTPException(status_code=500, detail="Failed to like song.")
     return {"message": "Song liked."}
 
