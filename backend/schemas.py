@@ -52,6 +52,11 @@ class SongCreateRequest(BaseModel):
     genre: Optional[str] = None
 
 
+class GenreCountResponse(BaseModel):
+    genre: str
+    count: int
+
+
 # ---------------------------------------------------------------------------
 # Playlists
 # ---------------------------------------------------------------------------
@@ -95,7 +100,6 @@ class HistoryRequest(BaseModel):
 
 class SearchResponse(BaseModel):
     songs: List[SongResponse]
-    youtube_results: List[YouTubeSearchResult]
 
 
 # ---------------------------------------------------------------------------
