@@ -44,3 +44,6 @@ Thumbs.db
 # Misc
 *.orig
 *.orig.*
+
+#prd document
+prd.txt

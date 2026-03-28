@@ -10,6 +10,17 @@ import { Colors } from './constants/theme';
 import { supabase } from './services/supabase';
 import { useAuthStore } from './store/authStore';
 
+// react-native-track-player is not available in Expo Go; import
+// dynamically so the rest of the app still works without native builds.
+type TrackPlayerModule = typeof import('react-native-track-player');
+const loadTrackPlayer = (): TrackPlayerModule | null => {
+  try {
+    return require('react-native-track-player') as TrackPlayerModule;
+  } catch {
+    return null;
+  }
+};
+
 // Extend React Navigation's DarkTheme with our custom palette
 const RagaStreamTheme = {
   ...DarkTheme,
@@ -36,6 +47,47 @@ export default function App() {
   const session = useAuthStore((state) => state.session);
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
   const setSession = useAuthStore((state) => state.setSession);
+
+  // Set up TrackPlayer on launch so lock-screen controls and Bluetooth
+  // hardware buttons are registered. Skipped gracefully in Expo Go.
+  useEffect(() => {
+    const setup = async () => {
+      const TP = loadTrackPlayer();
+      if (!TP) return;
+
+      const { Capability, AppKilledPlaybackBehavior } = TP;
+      const TrackPlayer = TP.default;
+
+      try {
+        await TrackPlayer.setupPlayer();
+
+        await TrackPlayer.updateOptions({
+          android: {
+            appKilledPlaybackBehavior:
+              AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
+          },
+          capabilities: [
+            Capability.Play,
+            Capability.Pause,
+            Capability.Stop,
+            Capability.SkipToNext,
+            Capability.SkipToPrevious,
+            Capability.SeekTo,
+          ],
+          compactCapabilities: [
+            Capability.Play,
+            Capability.Pause,
+            Capability.SkipToNext,
+          ],
+          progressUpdateEventInterval: 1,
+        });
+      } catch {
+        // setupPlayer throws if already initialised — safe to ignore.
+      }
+    };
+
+    void setup();
+  }, []);
 
   useEffect(() => {
     if (!supabase) {

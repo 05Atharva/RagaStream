@@ -23,7 +23,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#121212"
-      }
+      },
+      "package": "com.atharva14.ragastream"
     },
     "web": {
       "favicon": "./assets/favicon.png"
