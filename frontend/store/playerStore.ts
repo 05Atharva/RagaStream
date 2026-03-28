@@ -11,6 +11,9 @@ export type Track = {
   youtubeId?: string;
   channelName?: string;
   thumbnailUrl?: string;
+  youtube_id?: string;
+  channel_name?: string;
+  thumbnail_url?: string;
 };
 
 export type RepeatModeValue = 'off' | 'one' | 'all';
@@ -69,6 +72,9 @@ const normalizeTrack = (value: unknown): Track | null => {
     youtubeId: typeof rawTrack.youtubeId === 'string' ? rawTrack.youtubeId : undefined,
     channelName: typeof rawTrack.channelName === 'string' ? rawTrack.channelName : undefined,
     thumbnailUrl: typeof rawTrack.thumbnailUrl === 'string' ? rawTrack.thumbnailUrl : undefined,
+    youtube_id: typeof rawTrack.youtube_id === 'string' ? rawTrack.youtube_id : undefined,
+    channel_name: typeof rawTrack.channel_name === 'string' ? rawTrack.channel_name : undefined,
+    thumbnail_url: typeof rawTrack.thumbnail_url === 'string' ? rawTrack.thumbnail_url : undefined,
   };
 };
 

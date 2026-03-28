@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
-import { Modal, StyleSheet, View } from 'react-native';
+import React from 'react';
+import { StyleSheet, View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import MiniPlayer, { MINI_PLAYER_HEIGHT } from '../components/MiniPlayer';
 import { Colors } from '../constants/theme';
+import type { RootStackParamList } from './RootNavigator';
 import HomeScreen from '../screens/HomeScreen';
 import LibraryScreen from '../screens/LibraryScreen';
-import NowPlayingScreen from '../screens/NowPlayingScreen';
 import SearchScreen from '../screens/SearchScreen';
 import { usePlayerStore } from '../store/playerStore';
 
@@ -28,7 +30,7 @@ const TAB_ICONS: Record<string, { active: IoniconName; inactive: IoniconName }> 
 };
 
 export default function BottomTabNavigator() {
-  const [isNowPlayingVisible, setIsNowPlayingVisible] = useState(false);
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const isMiniPlayerVisible = currentTrack !== null;
 
@@ -73,18 +75,9 @@ export default function BottomTabNavigator() {
 
       {isMiniPlayerVisible ? (
         <View style={styles.miniPlayerContainer}>
-          <MiniPlayer onOpenNowPlaying={() => setIsNowPlayingVisible(true)} />
+          <MiniPlayer onOpenNowPlaying={() => navigation.navigate('NowPlaying')} />
         </View>
       ) : null}
-
-      <Modal
-        visible={isNowPlayingVisible}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setIsNowPlayingVisible(false)}
-      >
-        <NowPlayingScreen onClose={() => setIsNowPlayingVisible(false)} />
-      </Modal>
     </View>
   );
 }

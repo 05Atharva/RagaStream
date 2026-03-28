@@ -3,10 +3,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AuthGate from './components/AuthGate';
-import BottomTabNavigator from './navigation/BottomTabNavigator';
 import { Colors } from './constants/theme';
+import RootNavigator from './navigation/RootNavigator';
 import { supabase } from './services/supabase';
 import { useAuthStore } from './store/authStore';
 
@@ -116,25 +117,30 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <SafeAreaProvider>
-        <NavigationContainer theme={RagaStreamTheme}>
-          <StatusBar style="light" backgroundColor={Colors.background} />
-          {!hasHydrated ? (
-            <View style={styles.loadingScreen}>
-              <ActivityIndicator color={Colors.primary} size="large" />
-            </View>
-          ) : session ? (
-            <BottomTabNavigator />
-          ) : (
-            <AuthGate />
-          )}
-        </NavigationContainer>
-      </SafeAreaProvider>
+      <GestureHandlerRootView style={styles.root}>
+        <SafeAreaProvider>
+          <NavigationContainer theme={RagaStreamTheme}>
+            <StatusBar style="light" backgroundColor={Colors.background} />
+            {!hasHydrated ? (
+              <View style={styles.loadingScreen}>
+                <ActivityIndicator color={Colors.primary} size="large" />
+              </View>
+            ) : session ? (
+              <RootNavigator />
+            ) : (
+              <AuthGate />
+            )}
+          </NavigationContainer>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
     </QueryClientProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
   loadingScreen: {
     alignItems: 'center',
     backgroundColor: Colors.background,

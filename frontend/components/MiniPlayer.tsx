@@ -44,8 +44,8 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
     return null;
   }
 
-  const thumbnailSource = currentTrack.thumbnailUrl || currentTrack.artwork;
-  const channelName = currentTrack.channelName || currentTrack.artist;
+  const thumbnailSource = currentTrack.thumbnail_url || currentTrack.thumbnailUrl || currentTrack.artwork;
+  const channelName = currentTrack.channel_name || currentTrack.channelName || currentTrack.artist;
 
   const handleTogglePlay = async () => {
     if (isPlaying) {
