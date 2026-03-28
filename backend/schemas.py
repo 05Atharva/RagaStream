@@ -74,8 +74,17 @@ class PlaylistCreateRequest(BaseModel):
     description: Optional[str] = None
 
 
+class PlaylistUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
 class AddSongToPlaylistRequest(BaseModel):
     song_id: str
+
+
+class ReorderPlaylistSongsRequest(BaseModel):
+    song_ids: List[str]
 
 
 # ---------------------------------------------------------------------------
