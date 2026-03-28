@@ -4,11 +4,6 @@ import type { Song } from './useSongs';
 
 export type SearchResult = {
   songs: Song[];
-  playlists?: Array<{
-    id: string;
-    name: string;
-    description?: string;
-  }>;
 };
 
 export function useSearch(query: string) {
@@ -27,8 +22,8 @@ export function useSearch(query: string) {
 export function useSearchMutation() {
   return useMutation({
     mutationFn: async (query: string) => {
-      const { data } = await apiClient.post<SearchResult>('/search', {
-        query,
+      const { data } = await apiClient.get<SearchResult>('/search', {
+        params: { q: query },
       });
       return data;
     },

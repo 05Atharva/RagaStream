@@ -14,7 +14,7 @@ import { usePlayerStore } from '../store/playerStore';
 
 export type BottomTabParamList = {
   Home: undefined;
-  Search: undefined;
+  Search: { initialQuery?: string; autoSearch?: boolean } | undefined;
   Library: undefined;
 };
 

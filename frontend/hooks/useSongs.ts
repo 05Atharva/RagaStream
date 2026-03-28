@@ -3,22 +3,25 @@ import { apiClient } from '../services/apiClient';
 
 export type Song = {
   id: string;
+  youtube_id: string;
   title: string;
-  artist: string;
-  album?: string;
-  artwork?: string;
-  url?: string;
-  source?: 'youtube' | 'mp3_upload' | 'archive';
-  youtubeId?: string;
+  channel_name?: string | null;
+  thumbnail_url?: string | null;
+  duration_sec?: number | null;
+  language?: string | null;
+  genre?: string | null;
+  play_count?: number;
 };
 
 export type CreateSongInput = Omit<Song, 'id'>;
 
-export function useSongs() {
+export function useSongs(limit?: number) {
   return useQuery({
-    queryKey: ['songs'],
+    queryKey: ['songs', limit],
     queryFn: async () => {
-      const { data } = await apiClient.get<Song[]>('/songs');
+      const { data } = await apiClient.get<Song[]>('/songs', {
+        params: limit ? { limit } : undefined,
+      });
       return data;
     },
   });
