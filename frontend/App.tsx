@@ -1,10 +1,12 @@
 import React, { useEffect } from 'react';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import Toast from 'react-native-toast-message';
 import AuthGate from './components/AuthGate';
 import { Colors } from './constants/theme';
 import RootNavigator from './navigation/RootNavigator';
@@ -118,20 +120,23 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <GestureHandlerRootView style={styles.root}>
-        <SafeAreaProvider>
-          <NavigationContainer theme={RagaStreamTheme}>
-            <StatusBar style="light" backgroundColor={Colors.background} />
-            {!hasHydrated ? (
-              <View style={styles.loadingScreen}>
-                <ActivityIndicator color={Colors.primary} size="large" />
-              </View>
-            ) : session ? (
-              <RootNavigator />
-            ) : (
-              <AuthGate />
-            )}
-          </NavigationContainer>
-        </SafeAreaProvider>
+        <BottomSheetModalProvider>
+          <SafeAreaProvider>
+            <NavigationContainer theme={RagaStreamTheme}>
+              <StatusBar style="light" backgroundColor={Colors.background} />
+              {!hasHydrated ? (
+                <View style={styles.loadingScreen}>
+                  <ActivityIndicator color={Colors.primary} size="large" />
+                </View>
+              ) : session ? (
+                <RootNavigator />
+              ) : (
+                <AuthGate />
+              )}
+            </NavigationContainer>
+            <Toast />
+          </SafeAreaProvider>
+        </BottomSheetModalProvider>
       </GestureHandlerRootView>
     </QueryClientProvider>
   );

@@ -30,6 +30,8 @@ type PlayerStore = {
   togglePlay: () => Promise<void>;
   setQueue: (queue: Track[]) => Promise<void>;
   addToQueue: (track: Track) => Promise<void>;
+  reorderQueue: (queue: Track[]) => Promise<void>;
+  removeFromQueue: (trackId: string) => Promise<void>;
   setRepeat: (repeatMode: RepeatModeValue) => Promise<void>;
   toggleShuffle: () => void;
   setPosition: (position: number) => void;
@@ -164,6 +166,67 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
 
     try {
       await module.default.add(track);
+    } catch {
+      // Keep local queue state even if native queue sync is unavailable.
+    }
+  },
+  reorderQueue: async (queue) => {
+    const currentTrackId = get().currentTrack?.id ?? null;
+    const nextCurrentTrack =
+      (currentTrackId ? queue.find((track) => track.id === currentTrackId) : null) ?? queue[0] ?? null;
+
+    set({
+      queue,
+      currentTrack: nextCurrentTrack,
+    });
+
+    const module = loadTrackPlayerModule();
+    if (!module) {
+      return;
+    }
+
+    try {
+      await module.default.setQueue(queue);
+      if (nextCurrentTrack) {
+        const nextIndex = queue.findIndex((track) => track.id === nextCurrentTrack.id);
+        if (nextIndex >= 0) {
+          await module.default.skip(nextIndex);
+        }
+      }
+    } catch {
+      // Keep local queue state even if native queue sync is unavailable.
+    }
+  },
+  removeFromQueue: async (trackId) => {
+    const currentTrackId = get().currentTrack?.id ?? null;
+    const nextQueue = get().queue.filter((track) => track.id !== trackId);
+    const nextCurrentTrack =
+      currentTrackId === trackId
+        ? nextQueue[0] ?? null
+        : nextQueue.find((track) => track.id === currentTrackId) ?? nextQueue[0] ?? null;
+
+    set({
+      queue: nextQueue,
+      currentTrack: nextCurrentTrack,
+    });
+
+    const module = loadTrackPlayerModule();
+    if (!module) {
+      return;
+    }
+
+    try {
+      const queue = await module.default.getQueue();
+      const index = queue.findIndex((track) => track.id === trackId);
+      if (index >= 0) {
+        await module.default.remove(index);
+      }
+      if (nextCurrentTrack) {
+        const nextIndex = nextQueue.findIndex((track) => track.id === nextCurrentTrack.id);
+        if (nextIndex >= 0) {
+          await module.default.skip(nextIndex);
+        }
+      }
     } catch {
       // Keep local queue state even if native queue sync is unavailable.
     }
