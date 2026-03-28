@@ -9,6 +9,8 @@ export type Track = {
   url: string;
   source: 'youtube' | 'mp3_upload' | 'archive';
   youtubeId?: string;
+  channelName?: string;
+  thumbnailUrl?: string;
 };
 
 export type RepeatModeValue = 'off' | 'one' | 'all';
@@ -65,6 +67,8 @@ const normalizeTrack = (value: unknown): Track | null => {
     url: rawTrack.url,
     source: rawTrack.source,
     youtubeId: typeof rawTrack.youtubeId === 'string' ? rawTrack.youtubeId : undefined,
+    channelName: typeof rawTrack.channelName === 'string' ? rawTrack.channelName : undefined,
+    thumbnailUrl: typeof rawTrack.thumbnailUrl === 'string' ? rawTrack.thumbnailUrl : undefined,
   };
 };
 
