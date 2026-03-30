@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -18,6 +18,7 @@ import { Image } from 'expo-image';
 import TrackPlayer from 'react-native-track-player';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
+import { ensureSongInCatalogue } from '../services/songService';
 import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import { usePlayerStore, type Track } from '../store/playerStore';
@@ -30,15 +31,6 @@ type YouTubeSearchResult = {
   channel: string;
   duration: number;
   thumbnail: string;
-};
-
-type SongRecord = {
-  id: string;
-  youtube_id: string;
-  title: string;
-  channel_name?: string | null;
-  thumbnail_url?: string | null;
-  duration_sec?: number | null;
 };
 
 type PlaylistRecord = {
@@ -80,7 +72,6 @@ export default function SearchScreen({ route, navigation }: Props) {
   const [playlists, setPlaylists] = useState<PlaylistRecord[]>([]);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const songCache = useRef<Record<string, SongRecord>>({});
   const menuSheetRef = useRef<BottomSheetModal>(null);
   const playlistSheetRef = useRef<BottomSheetModal>(null);
 
@@ -136,26 +127,6 @@ export default function SearchScreen({ route, navigation }: Props) {
   const snapPoints = useMemo(() => ['30%', '48%'], []);
   const playlistSnapPoints = useMemo(() => ['50%', '75%'], []);
 
-  const ensureSongInCatalogue = async (item: YouTubeSearchResult) => {
-    const cached = songCache.current[item.youtube_id];
-    if (cached) {
-      return cached;
-    }
-
-    const payload = {
-      youtube_id: item.youtube_id,
-      title: item.title,
-      channel_name: item.channel,
-      thumbnail_url: item.thumbnail,
-      duration_sec: item.duration,
-      genre: 'Bollywood',
-      language: 'Hindi',
-    };
-    const { data } = await apiClient.post<SongRecord>('/songs', payload);
-    songCache.current[item.youtube_id] = data;
-    return data;
-  };
-
   const handlePlayResult = async (item: YouTubeSearchResult) => {
     if (isRowLoading) {
       return;
@@ -164,13 +135,19 @@ export default function SearchScreen({ route, navigation }: Props) {
     setIsRowLoading(item.youtube_id);
 
     try {
-      const song = await ensureSongInCatalogue(item);
+      const songId = await ensureSongInCatalogue({
+        youtube_id: item.youtube_id,
+        title: item.title,
+        channel_name: item.channel,
+        thumbnail_url: item.thumbnail,
+        duration_sec: item.duration,
+      });
       const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
         params: { id: item.youtube_id },
       });
 
       const track: Track = {
-        id: song.id,
+        id: songId,
         title: item.title,
         artist: item.channel,
         album: 'YouTube',
@@ -213,8 +190,14 @@ export default function SearchScreen({ route, navigation }: Props) {
       return;
     }
     try {
-      const song = await ensureSongInCatalogue(selectedResult);
-      await apiClient.post('/liked', { song_id: song.id });
+      const songId = await ensureSongInCatalogue({
+        youtube_id: selectedResult.youtube_id,
+        title: selectedResult.title,
+        channel_name: selectedResult.channel,
+        thumbnail_url: selectedResult.thumbnail,
+        duration_sec: selectedResult.duration,
+      });
+      await apiClient.post('/liked', { song_id: songId });
       Toast.show({ type: 'success', text1: 'Added to liked songs' });
     } catch {
       Toast.show({ type: 'error', text1: 'Could not like song' });
@@ -226,12 +209,18 @@ export default function SearchScreen({ route, navigation }: Props) {
       return;
     }
     try {
-      const song = await ensureSongInCatalogue(selectedResult);
+      const songId = await ensureSongInCatalogue({
+        youtube_id: selectedResult.youtube_id,
+        title: selectedResult.title,
+        channel_name: selectedResult.channel,
+        thumbnail_url: selectedResult.thumbnail,
+        duration_sec: selectedResult.duration,
+      });
       const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
         params: { id: selectedResult.youtube_id },
       });
       const track: Track = {
-        id: song.id,
+        id: songId,
         title: selectedResult.title,
         artist: selectedResult.channel,
         album: 'YouTube',
@@ -280,8 +269,14 @@ export default function SearchScreen({ route, navigation }: Props) {
       return;
     }
     try {
-      const song = await ensureSongInCatalogue(selectedResult);
-      await apiClient.post(`/playlists/${playlist.id}/songs`, { song_id: song.id });
+      const songId = await ensureSongInCatalogue({
+        youtube_id: selectedResult.youtube_id,
+        title: selectedResult.title,
+        channel_name: selectedResult.channel,
+        thumbnail_url: selectedResult.thumbnail,
+        duration_sec: selectedResult.duration,
+      });
+      await apiClient.post(`/playlists/${playlist.id}/songs`, { song_id: songId });
       Toast.show({ type: 'success', text1: `Added to ${playlist.name}` });
       playlistSheetRef.current?.dismiss();
     } catch {
