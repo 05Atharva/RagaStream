@@ -7,7 +7,7 @@ export type Track = {
   album: string;
   artwork: string;
   url: string;
-  source: 'youtube' | 'mp3_upload' | 'archive';
+  source: 'youtube';
   youtubeId?: string;
   channelName?: string;
   thumbnailUrl?: string;
@@ -56,9 +56,7 @@ const normalizeTrack = (value: unknown): Track | null => {
     typeof rawTrack.album !== 'string' ||
     typeof rawTrack.artwork !== 'string' ||
     typeof rawTrack.url !== 'string' ||
-    (rawTrack.source !== 'youtube' &&
-      rawTrack.source !== 'mp3_upload' &&
-      rawTrack.source !== 'archive')
+    rawTrack.source !== 'youtube'
   ) {
     return null;
   }

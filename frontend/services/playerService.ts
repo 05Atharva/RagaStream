@@ -28,7 +28,11 @@ export default async function playerService() {
 
   TrackPlayer.addEventListener(Event.PlaybackError, async () => {
     const track = await TrackPlayer.getActiveTrack();
-    if (!track || !('youtubeId' in track) || !track.youtubeId) {
+    const youtubeId =
+      (track as Record<string, unknown>)?.youtubeId as string | undefined ??
+      (track as Record<string, unknown>)?.youtube_id as string | undefined;
+
+    if (!track || !youtubeId) {
       return;
     }
 
@@ -41,12 +45,17 @@ export default async function playerService() {
 
     try {
       const { position } = await TrackPlayer.getProgress();
-      const res = await fetch(`${apiBase}/youtube/stream?id=${track.youtubeId}`);
-      const data = await res.json();
+      const res = await fetch(`${apiBase}/youtube/stream?id=${youtubeId}`);
+      const data = await res.json() as { stream_url?: string };
       if (!data?.stream_url) {
         throw new Error('Missing stream URL');
       }
+
       const index = await TrackPlayer.getActiveTrackIndex();
+      if (index === undefined || index < 0) {
+        throw new Error('No active track index');
+      }
+
       await TrackPlayer.remove(index);
       await TrackPlayer.add({ ...track, url: data.stream_url }, index);
       await TrackPlayer.skip(index);

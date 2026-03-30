@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -31,6 +31,15 @@ type YouTubeSearchResult = {
   channel: string;
   duration: number;
   thumbnail: string;
+};
+
+type SongRecord = {
+  id: string;
+  youtube_id: string;
+  title: string;
+  channel_name?: string | null;
+  thumbnail_url?: string | null;
+  duration_sec?: number | null;
 };
 
 type PlaylistRecord = {
