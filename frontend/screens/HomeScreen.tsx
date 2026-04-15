@@ -1,5 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,10 +15,12 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { MotiView } from 'moti';
 import { apiClient } from '../services/apiClient';
+import { playTrack } from '../services/audioPlayer';
 import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import type { Song } from '../hooks/useSongs';
 import { useAuthStore } from '../store/authStore';
+import { supabase } from '../services/supabase';
 
 type Props = BottomTabScreenProps<BottomTabParamList, 'Home'>;
 
@@ -141,17 +145,75 @@ export default function HomeScreen({ navigation }: Props) {
   const isFeaturedLoading = featuredQueries.some((query) => query.isLoading);
   const avatarLetter = displayName.charAt(0).toUpperCase();
 
+  const [featuredLoading, setFeaturedLoading] = useState<string | null>(null);
+
+  const handlePlayFeatured = async (item: YouTubeSearchResult) => {
+    if (featuredLoading) return;
+    setFeaturedLoading(item.youtube_id);
+    try {
+      const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
+        params: { id: item.youtube_id },
+      });
+      const track = {
+        id: item.youtube_id,
+        title: item.title,
+        artist: item.channel,
+        album: 'Featured',
+        artwork: item.thumbnail,
+        url: data.stream_url,
+        source: 'youtube' as const,
+        youtubeId: item.youtube_id,
+        channelName: item.channel,
+        thumbnailUrl: item.thumbnail,
+      };
+      await playTrack(track);
+      const { usePlayerStore: store } = await import('../store/playerStore');
+      store.setState({ currentTrack: track, queue: [track], isPlaying: true });
+      navigation.navigate('NowPlaying');
+    } catch {
+      /* ignore — stream unavailable */
+    } finally {
+      setFeaturedLoading(null);
+    }
+  };
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await supabase?.auth.signOut();
+            } catch {
+              // session already gone — App.tsx onAuthStateChange will clear it
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={styles.headerCopy}>
+            <Text style={styles.brandName}>RagaStream</Text>
             <Text style={styles.greeting}>{getGreeting(displayName)}</Text>
             <Text style={styles.headerSubtitle}>Your stream starts where you left it.</Text>
           </View>
-          <View style={styles.avatar}>
+          <Pressable
+            onPress={handleLogout}
+            style={styles.avatar}
+            hitSlop={10}
+          >
             <Text style={styles.avatarText}>{avatarLetter}</Text>
-          </View>
+          </Pressable>
         </View>
 
         <View style={styles.section}>
@@ -263,19 +325,29 @@ export default function HomeScreen({ navigation }: Props) {
           ) : (
             <View style={styles.featuredList}>
               {featuredCards.map((item) => (
-                <View key={item.youtube_id} style={styles.featuredCard}>
+                <Pressable
+                  key={item.youtube_id}
+                  style={styles.featuredCard}
+                  onPress={() => void handlePlayFeatured(item)}
+                >
                   <Image
                     source={item.thumbnail ? { uri: item.thumbnail } : undefined}
                     style={styles.featuredThumb}
                     contentFit="cover"
                   />
+                  {featuredLoading === item.youtube_id ? (
+                    <ActivityIndicator
+                      color={Colors.primary}
+                      style={StyleSheet.absoluteFillObject}
+                    />
+                  ) : null}
                   <Text numberOfLines={2} style={styles.featuredTitle}>
                     {item.title}
                   </Text>
                   <Text numberOfLines={1} style={styles.featuredSubtitle}>
                     {item.channel}
                   </Text>
-                </View>
+                </Pressable>
               ))}
             </View>
           )}
@@ -309,6 +381,14 @@ const styles = StyleSheet.create({
     color: Colors.onBackground,
     fontSize: Typography.fontSizeXl,
     fontWeight: Typography.fontWeightBold,
+  },
+  brandName: {
+    color: Colors.primary,
+    fontSize: Typography.fontSizeSm,
+    fontWeight: Typography.fontWeightBold,
+    letterSpacing: 1.5,
+    marginBottom: 4,
+    textTransform: 'uppercase',
   },
   headerSubtitle: {
     color: Colors.muted,

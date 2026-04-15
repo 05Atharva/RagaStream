@@ -14,7 +14,7 @@ from schemas import LikeRequest, MessageResponse, SongResponse
 router = APIRouter()
 
 
-@router.post("/", response_model=MessageResponse, status_code=201)
+@router.post("", response_model=MessageResponse, status_code=201)
 async def like_song(
     body: LikeRequest,
     user: dict = Depends(get_current_user),
@@ -43,7 +43,7 @@ async def unlike_song(
     return {"message": "Song unliked."}
 
 
-@router.get("/", response_model=List[SongResponse])
+@router.get("", response_model=List[SongResponse])
 async def list_liked_songs(user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     result = (

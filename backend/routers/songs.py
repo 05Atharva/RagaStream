@@ -14,7 +14,7 @@ router = APIRouter()
 genres_router = APIRouter()
 
 
-@router.get("/", response_model=List[SongResponse])
+@router.get("", response_model=List[SongResponse])
 async def list_songs(
     limit: int = Query(20, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
@@ -62,7 +62,7 @@ async def get_song(song_id: str):
     return result.data
 
 
-@router.post("/", response_model=SongResponse, status_code=201)
+@router.post("", response_model=SongResponse, status_code=201)
 async def create_song(body: SongCreateRequest):
     """Save or update YouTube metadata in the songs catalogue."""
     supabase = get_supabase()

@@ -44,7 +44,7 @@ def _trim_history(user_id: str) -> None:
         supabase.table("play_history").delete().in_("id", oldest_ids).execute()
 
 
-@router.post("/", response_model=MessageResponse, status_code=201)
+@router.post("", response_model=MessageResponse, status_code=201)
 async def record_history(
     body: HistoryRequest,
     background_tasks: BackgroundTasks,
@@ -69,7 +69,7 @@ async def record_history(
     return {"message": "Play history recorded."}
 
 
-@router.get("/", response_model=List[SongResponse])
+@router.get("", response_model=List[SongResponse])
 async def list_history(user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     result = (

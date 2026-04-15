@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import TrackPlayer from '../services/trackPlayerShim';
+import { playTrack } from '../services/audioPlayer';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { ensureSongInCatalogue } from '../services/songService';
@@ -143,17 +144,22 @@ export default function SearchScreen({ route, navigation }: Props) {
 
     setIsRowLoading(item.youtube_id);
 
+    // Save to catalogue in background — don't block playback on it
+    const cataloguePromise = ensureSongInCatalogue({
+      youtube_id: item.youtube_id,
+      title: item.title,
+      channel_name: item.channel,
+      thumbnail_url: item.thumbnail,
+      duration_sec: item.duration,
+    }).catch(() => item.youtube_id); // fallback to youtube_id if save fails
+
     try {
-      const songId = await ensureSongInCatalogue({
-        youtube_id: item.youtube_id,
-        title: item.title,
-        channel_name: item.channel,
-        thumbnail_url: item.thumbnail,
-        duration_sec: item.duration,
-      });
       const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
         params: { id: item.youtube_id },
       });
+
+      // Resolve catalogue ID (may already be done, or still in flight)
+      const songId = await cataloguePromise;
 
       const track: Track = {
         id: songId,
@@ -168,9 +174,8 @@ export default function SearchScreen({ route, navigation }: Props) {
         thumbnailUrl: item.thumbnail,
       };
 
-      await TrackPlayer.reset();
-      await TrackPlayer.add(track);
-      await TrackPlayer.play();
+      // playTrack uses expo-av in Expo Go, RNTP in native builds
+      await playTrack(track);
 
       usePlayerStore.setState({
         currentTrack: track,
@@ -179,10 +184,12 @@ export default function SearchScreen({ route, navigation }: Props) {
       });
 
       navigation.getParent()?.navigate('NowPlaying');
-    } catch {
+    } catch (err) {
+      console.error('[SearchScreen] playback error:', err);
       Toast.show({
         type: 'error',
         text1: 'Could not start playback',
+        text2: 'Stream unavailable — try another song',
       });
     } finally {
       setIsRowLoading(null);

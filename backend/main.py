@@ -50,6 +50,7 @@ app = FastAPI(
     version="1.0.0",
     description="Backend API for the RagaStream music streaming app.",
     lifespan=lifespan,
+    redirect_slashes=False,   # prevent 307s that strip Authorization headers
 )
 
 # CORS — allow all origins for development

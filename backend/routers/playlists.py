@@ -61,7 +61,7 @@ def _fetch_playlist_with_songs(playlist_id: str, user_id: str) -> dict:
     return {**playlist, "songs": songs}
 
 
-@router.post("/", response_model=PlaylistResponse, status_code=201)
+@router.post("", response_model=PlaylistResponse, status_code=201)
 async def create_playlist(
     body: PlaylistCreateRequest,
     user: dict = Depends(get_current_user),
@@ -80,7 +80,7 @@ async def create_playlist(
     return {**result.data[0], "songs": []}
 
 
-@router.get("/", response_model=List[PlaylistResponse])
+@router.get("", response_model=List[PlaylistResponse])
 async def list_playlists(user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     result = (

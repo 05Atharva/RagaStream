@@ -107,7 +107,11 @@ async def search_youtube(
                         title=entry.get("title", "Unknown"),
                         channel=entry.get("channel", entry.get("uploader", "Unknown")),
                         duration=_duration_int(entry.get("duration")),
-                        thumbnail=entry.get("thumbnail", ""),
+                        # extract_flat rarely returns thumbnail; build it from the ID
+                        thumbnail=(
+                            entry.get("thumbnail")
+                            or f"https://i.ytimg.com/vi/{entry.get('id', '')}/hqdefault.jpg"
+                        ),
                     )
                 )
             return results

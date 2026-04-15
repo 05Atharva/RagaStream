@@ -13,14 +13,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from '@react-native-community/blur';
+import SafeBlurView from '../components/SafeBlurView';
 import Slider from '@react-native-community/slider';
 import { BottomSheetFlatList, BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
 import { Image } from 'expo-image';
 import {
-  PanGestureHandler,
+  Gesture,
+  GestureDetector,
   Swipeable,
-  type PanGestureHandlerGestureEvent,
 } from 'react-native-gesture-handler';
 import DraggableFlatList, {
   type RenderItemParams,
@@ -32,7 +32,6 @@ import Animated, {
   Easing,
   cancelAnimation,
   runOnJS,
-  useAnimatedGestureHandler,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -238,26 +237,28 @@ export default function NowPlayingScreen() {
     navigation.goBack();
   };
 
-  const gestureHandler = useAnimatedGestureHandler<PanGestureHandlerGestureEvent>({
-    onActive: (event) => {
+  const panGesture = Gesture.Pan()
+    .onUpdate((event) => {
       translateY.value = Math.max(0, event.translationY);
-    },
-    onEnd: () => {
+    })
+    .onEnd(() => {
       if (translateY.value > DISMISS_THRESHOLD) {
-        translateY.value = withTiming(Dimensions.get('window').height, { duration: 180 }, (finished) => {
-          if (finished) {
-            runOnJS(dismiss)();
+        translateY.value = withTiming(
+          Dimensions.get('window').height,
+          { duration: 180 },
+          (finished) => {
+            if (finished) {
+              runOnJS(dismiss)();
+            }
           }
-        });
+        );
         return;
       }
-
       translateY.value = withSpring(0, {
         damping: 18,
         stiffness: 180,
       });
-    },
-  });
+    });
 
   const containerAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
@@ -494,13 +495,13 @@ export default function NowPlayingScreen() {
 
   return (
     <>
-      <PanGestureHandler onGestureEvent={gestureHandler}>
+      <GestureDetector gesture={panGesture}>
         <Animated.View style={[styles.flex, containerAnimatedStyle]}>
           <SafeAreaView style={styles.container}>
             {thumbnailSource ? (
               <>
                 <Image source={{ uri: thumbnailSource }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
-                <BlurView
+                <SafeBlurView
                   blurAmount={32}
                   blurType="dark"
                   reducedTransparencyFallbackColor={Colors.background}
@@ -604,7 +605,7 @@ export default function NowPlayingScreen() {
             </View>
           </SafeAreaView>
         </Animated.View>
-      </PanGestureHandler>
+      </GestureDetector>
 
       <BottomSheetModal
         ref={playlistsSheetRef}
