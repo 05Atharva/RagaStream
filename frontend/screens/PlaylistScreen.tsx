@@ -15,7 +15,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import DraggableFlatList, { type RenderItemParams } from 'react-native-draggable-flatlist';
 import { Swipeable } from 'react-native-gesture-handler';
-import TrackPlayer from 'react-native-track-player';
+import TrackPlayer from '../services/trackPlayerShim';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';

@@ -26,7 +26,7 @@ import DraggableFlatList, {
   type RenderItemParams,
   ScaleDecorator,
 } from 'react-native-draggable-flatlist';
-import TrackPlayer from 'react-native-track-player';
+import TrackPlayer from '../services/trackPlayerShim';
 import Toast from 'react-native-toast-message';
 import Animated, {
   Easing,

@@ -3,7 +3,7 @@ import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, NativeModules, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
@@ -17,6 +17,10 @@ import { useAuthStore } from './store/authStore';
 // dynamically so the rest of the app still works without native builds.
 type TrackPlayerModule = typeof import('react-native-track-player');
 const loadTrackPlayer = (): TrackPlayerModule | null => {
+  // NativeModules.TrackPlayer is null in Expo Go — never call require() then,
+  // because RNTP's module eval reads native constants and crashes immediately.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((NativeModules as any).TrackPlayer == null) return null;
   try {
     return require('react-native-track-player') as TrackPlayerModule;
   } catch {

@@ -1,4 +1,4 @@
-import TrackPlayer, { Event } from 'react-native-track-player';
+import TrackPlayer, { Event } from '../services/trackPlayerShim';
 import Toast from 'react-native-toast-message';
 
 export default async function playerService() {

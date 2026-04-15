@@ -15,7 +15,7 @@ import { BottomSheetFlatList, BottomSheetModal, BottomSheetView } from '@gorhom/
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import TrackPlayer from 'react-native-track-player';
+import TrackPlayer from '../services/trackPlayerShim';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { ensureSongInCatalogue } from '../services/songService';

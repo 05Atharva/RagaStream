@@ -8,7 +8,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import TrackPlayer from 'react-native-track-player';
+import TrackPlayer from '../services/trackPlayerShim';
 import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
 import { usePlayerStore } from '../store/playerStore';
 

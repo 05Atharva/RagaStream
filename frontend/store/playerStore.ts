@@ -1,3 +1,4 @@
+import { NativeModules } from 'react-native';
 import { create } from 'zustand';
 
 export type Track = {
@@ -95,6 +96,8 @@ const mapPlaybackStateToPlaying = (
 ) => playbackState.state === module.State.Playing;
 
 const loadTrackPlayerModule = (): TrackPlayerModule | null => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((NativeModules as any).TrackPlayer == null) return null;
   try {
     return require('react-native-track-player') as TrackPlayerModule;
   } catch {

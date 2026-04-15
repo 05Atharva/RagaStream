@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import TrackPlayer from 'react-native-track-player';
+import TrackPlayer from '../services/trackPlayerShim';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
