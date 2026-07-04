@@ -55,3 +55,9 @@ Thumbs.db
 
 # ── PRD document ──────────────────────────────────────────────────────────────
 prd.txt
+
+# ── Design exports (Stitch / Figma raw exports — not source-controlled) ───────
+frontend/new_screens/
+
+# ── Internal planning docs ────────────────────────────────────────────────────
+implementation_plan.md
