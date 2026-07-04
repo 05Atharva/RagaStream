@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
+  Linking,
   Pressable,
   StyleProp,
   StyleSheet,
@@ -13,10 +14,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import SafeBlurView from '../components/SafeBlurView';
+import SongOptionsSheet from '../components/SongOptionsSheet';
 import Slider from '@react-native-community/slider';
 import { BottomSheetFlatList, BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
 import { Image } from 'expo-image';
+import SleepTimer from '../components/SleepTimer';
 import {
   Gesture,
   GestureDetector,
@@ -27,6 +31,12 @@ import DraggableFlatList, {
   ScaleDecorator,
 } from 'react-native-draggable-flatlist';
 import TrackPlayer from '../services/trackPlayerShim';
+import {
+  isTrackPlayerAvailable,
+  onPlaybackProgress,
+  togglePlayback as audioToggle,
+  seekTo as audioSeekTo,
+} from '../services/audioPlayer';
 import Toast from 'react-native-toast-message';
 import Animated, {
   Easing,
@@ -40,7 +50,6 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { apiClient } from '../services/apiClient';
-import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import { usePlayerStore, type RepeatModeValue, type Track } from '../store/playerStore';
 
@@ -131,7 +140,7 @@ function MarqueeText({ text, style }: MarqueeTextProps) {
 
 export default function NowPlayingScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const queue = usePlayerStore((state) => state.queue);
@@ -153,8 +162,10 @@ export default function NowPlayingScreen() {
   const heartScale = useSharedValue(1);
   const playlistsSheetRef = useRef<BottomSheetModal>(null);
   const queueSheetRef = useRef<BottomSheetModal>(null);
+  const sleepTimerRef = useRef<BottomSheetModal>(null);
+  const songOptionsSheetRef = useRef<BottomSheetModal>(null);
 
-  const albumSize = Math.min(width - MIN_ART_PADDING, Dimensions.get('window').width - MIN_ART_PADDING);
+  const albumSize = Math.min(width - MIN_ART_PADDING, height * 0.38, 320);
   const bottomSheetSnapPoints = useMemo(() => ['55%', '82%'], []);
 
   const thumbnailSource = useMemo(() => {
@@ -169,31 +180,34 @@ export default function NowPlayingScreen() {
   const youtubeId = currentTrack?.youtube_id || currentTrack?.youtubeId || null;
 
   useEffect(() => {
-    let isMounted = true;
+    if (!isTrackPlayerAvailable) {
+      // expo-av path: receive live progress from the audioPlayer service
+      onPlaybackProgress((_playing, position, duration) => {
+        setProgress({ position, duration });
+        setPosition(position);
+        setDuration(duration);
+      });
+      return () => {
+        // deregister on unmount
+        onPlaybackProgress(() => {});
+      };
+    }
 
+    // RNTP path (native builds): poll every second
+    let isMounted = true;
     const syncProgress = async () => {
       try {
-        const nextProgress = await TrackPlayer.getProgress();
-        if (!isMounted) {
-          return;
-        }
-
-        setProgress({
-          position: nextProgress.position,
-          duration: nextProgress.duration,
-        });
-        setPosition(nextProgress.position);
-        setDuration(nextProgress.duration);
+        const next = await TrackPlayer.getProgress();
+        if (!isMounted) return;
+        setProgress({ position: next.position, duration: next.duration });
+        setPosition(next.position);
+        setDuration(next.duration);
       } catch {
-        // Ignore progress polling failures while the player is idle.
+        // ignore while player is idle
       }
     };
-
     void syncProgress();
-    const interval = setInterval(() => {
-      void syncProgress();
-    }, 1000);
-
+    const interval = setInterval(() => void syncProgress(), 1000);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -381,14 +395,8 @@ export default function NowPlayingScreen() {
   };
 
   const togglePlayback = async () => {
-    if (isPlaying) {
-      await TrackPlayer.pause();
-      usePlayerStore.setState({ isPlaying: false });
-      return;
-    }
-
-    await TrackPlayer.play();
-    usePlayerStore.setState({ isPlaying: true });
+    const nowPlaying = await audioToggle();
+    usePlayerStore.setState({ isPlaying: nowPlaying });
   };
 
   const skipPrevious = async () => {
@@ -408,7 +416,7 @@ export default function NowPlayingScreen() {
   };
 
   const handleSeekComplete = async (value: number) => {
-    await TrackPlayer.seekTo(value);
+    await audioSeekTo(value);
     setProgress((prev) => ({ ...prev, position: value }));
     setPosition(value);
   };
@@ -434,19 +442,23 @@ export default function NowPlayingScreen() {
     await setRepeat(nextMode);
   };
 
+  const handleShareYouTube = () => {
+    if (!youtubeId) return;
+    void Linking.openURL(`https://www.youtube.com/watch?v=${youtubeId}`);
+  };
+
   const renderPlaylistItem = ({ item }: { item: PlaylistRecord }) => (
     <Pressable onPress={() => void handleAddToPlaylist(item)} style={styles.sheetRow}>
       <View>
         <Text style={styles.sheetRowTitle}>{item.name}</Text>
         <Text style={styles.sheetRowSubtitle}>{item.songs?.length ?? 0} songs</Text>
       </View>
-      <Ionicons name="add-circle-outline" size={22} color={Colors.onBackground} />
+      <Ionicons name="add-circle-outline" size={22} color="#e2e2e2" />
     </Pressable>
   );
 
   const renderQueueItem = ({ item, drag, isActive }: RenderItemParams<Track>) => {
     const isCurrent = item.id === currentTrack?.id;
-    const rowColor = isCurrent ? 'rgba(124, 58, 237, 0.2)' : Colors.surface;
     const thumbnail = item.thumbnail_url || item.thumbnailUrl || item.artwork;
     const itemChannel = item.channel_name || item.channelName || item.artist;
 
@@ -454,8 +466,11 @@ export default function NowPlayingScreen() {
       <ScaleDecorator>
         <Swipeable
           renderRightActions={() => (
-            <Pressable onPress={() => void handleRemoveQueueItem(item.id)} style={styles.deleteAction}>
-              <Ionicons name="trash-outline" size={20} color={Colors.onBackground} />
+            <Pressable
+              onPress={() => void handleRemoveQueueItem(item.id)}
+              style={styles.deleteAction}
+            >
+              <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
             </Pressable>
           )}
         >
@@ -464,19 +479,39 @@ export default function NowPlayingScreen() {
             onLongPress={drag}
             style={[
               styles.queueRow,
-              { backgroundColor: rowColor, opacity: isActive ? 0.9 : 1 },
+              isCurrent && styles.queueRowCurrent,
+              { opacity: isActive ? 0.85 : 1 },
             ]}
           >
-            <Image source={thumbnail ? { uri: thumbnail } : undefined} style={styles.queueThumb} contentFit="cover" />
+            <View style={styles.queueThumbWrap}>
+              {thumbnail ? (
+                <Image
+                  source={{ uri: thumbnail }}
+                  style={StyleSheet.absoluteFillObject}
+                  contentFit="cover"
+                />
+              ) : (
+                <Ionicons name="musical-notes" size={16} color="rgba(255,255,255,0.3)" />
+              )}
+            </View>
             <View style={styles.queueMeta}>
-              <Text numberOfLines={1} style={styles.queueTitle}>
+              <Text numberOfLines={1} style={[styles.queueTitle, isCurrent && styles.queueTitleCurrent]}>
                 {item.title}
               </Text>
-              <Text numberOfLines={1} style={styles.queueSubtitle}>
-                {itemChannel}
-              </Text>
+              <Text numberOfLines={1} style={styles.queueSubtitle}>{itemChannel}</Text>
             </View>
-            <Ionicons name="menu" size={20} color={isCurrent ? Colors.primaryLight : Colors.muted} />
+            <View style={styles.queueRowActions}>
+              {!isCurrent && (
+                <Pressable
+                  onPress={() => void handleRemoveQueueItem(item.id)}
+                  style={styles.queueRemoveBtn}
+                  hitSlop={4}
+                >
+                  <Ionicons name="close-outline" size={20} color="rgba(255,255,255,0.4)" />
+                </Pressable>
+              )}
+              <Ionicons name="reorder-three-outline" size={20} color="rgba(255,255,255,0.3)" />
+            </View>
           </Pressable>
         </Swipeable>
       </ScaleDecorator>
@@ -486,8 +521,8 @@ export default function NowPlayingScreen() {
   if (!currentTrack) {
     return (
       <SafeAreaView style={styles.emptyState}>
-        <Pressable hitSlop={8} onPress={dismiss} style={styles.closeButton}>
-          <Ionicons name="chevron-down" size={24} color={Colors.onBackground} />
+        <Pressable hitSlop={8} onPress={dismiss} style={styles.headerBtn}>
+          <Ionicons name="chevron-down" size={24} color="rgba(255,255,255,0.9)" />
         </Pressable>
       </SafeAreaView>
     );
@@ -498,26 +533,37 @@ export default function NowPlayingScreen() {
       <GestureDetector gesture={panGesture}>
         <Animated.View style={[styles.flex, containerAnimatedStyle]}>
           <SafeAreaView style={styles.container}>
+            {/* Ambient blurred background */}
             {thumbnailSource ? (
               <>
-                <Image source={{ uri: thumbnailSource }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
+                <Image
+                  source={{ uri: thumbnailSource }}
+                  style={[StyleSheet.absoluteFillObject, styles.bgImageTransform]}
+                  contentFit="cover"
+                />
                 <SafeBlurView
-                  blurAmount={32}
+                  blurAmount={40}
                   blurType="dark"
-                  reducedTransparencyFallbackColor={Colors.background}
+                  reducedTransparencyFallbackColor="#000000"
                   style={StyleSheet.absoluteFillObject}
                 />
               </>
             ) : null}
             <View style={styles.overlay} />
 
+            {/* Header */}
             <View style={styles.header}>
-              <Pressable hitSlop={8} onPress={dismiss} style={styles.closeButton}>
-                <Ionicons name="chevron-down" size={24} color={Colors.onBackground} />
+              <Pressable hitSlop={8} onPress={dismiss} style={styles.headerBtn}>
+                <Ionicons name="chevron-down" size={24} color="rgba(255,255,255,0.9)" />
+              </Pressable>
+              <Text style={styles.headerLabel}>NOW PLAYING</Text>
+              <Pressable hitSlop={8} onPress={() => songOptionsSheetRef.current?.present()} style={styles.headerBtn}>
+                <Ionicons name="ellipsis-vertical" size={20} color="rgba(255,255,255,0.9)" />
               </Pressable>
             </View>
 
-            <View style={styles.content}>
+            {/* Album art */}
+            <View style={styles.artSection}>
               <View style={[styles.artworkWrapper, { width: albumSize, height: albumSize }]}>
                 <Image
                   source={thumbnailSource ? { uri: thumbnailSource } : undefined}
@@ -525,25 +571,38 @@ export default function NowPlayingScreen() {
                   contentFit="cover"
                 />
                 <View style={styles.youtubeBadge}>
-                  <Ionicons name="logo-youtube" size={14} color={Colors.onBackground} />
+                  <Ionicons name="logo-youtube" size={14} color="#FFFFFF" />
                 </View>
               </View>
+            </View>
 
+            {/* Player controls */}
+            <View style={styles.playerControls}>
+              {/* Track meta */}
               <View style={styles.metaSection}>
                 <MarqueeText text={currentTrack.title} style={styles.title} />
-                <Text numberOfLines={1} style={styles.channelName}>
-                  {channelName}
-                </Text>
+                <Pressable
+                  onPress={() => {
+                    if (channelName) {
+                      navigation.navigate('Channel', { channelName });
+                    }
+                  }}
+                >
+                  <Text numberOfLines={1} style={styles.channelName}>
+                    {channelName}
+                  </Text>
+                </Pressable>
               </View>
 
+              {/* Seek bar */}
               <View style={styles.seekSection}>
                 <Slider
                   value={progress.position}
                   minimumValue={0}
                   maximumValue={Math.max(progress.duration, 1)}
-                  minimumTrackTintColor={Colors.primary}
-                  maximumTrackTintColor="#555555"
-                  thumbTintColor={Colors.primaryLight}
+                  minimumTrackTintColor="#7C3AED"
+                  maximumTrackTintColor="rgba(255,255,255,0.15)"
+                  thumbTintColor="#d2bbff"
                   onSlidingComplete={(value) => void handleSeekComplete(value)}
                 />
                 <View style={styles.timeRow}>
@@ -552,54 +611,65 @@ export default function NowPlayingScreen() {
                 </View>
               </View>
 
+              {/* Transport controls */}
               <View style={styles.controlsRow}>
                 <Pressable hitSlop={8} onPress={() => void skipPrevious()} style={styles.transportButton}>
-                  <Ionicons name="play-skip-back" size={32} color={Colors.onBackground} />
+                  <Ionicons name="play-skip-back" size={28} color="rgba(255,255,255,0.85)" />
                 </Pressable>
 
                 <Pressable hitSlop={8} onPress={() => void togglePlayback()} style={styles.playPauseButton}>
+                  <LinearGradient
+                    colors={['#7C3AED', '#5B21B6']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={StyleSheet.absoluteFillObject}
+                  />
                   <Ionicons
                     name={isPlaying ? 'pause' : 'play'}
-                    size={28}
-                    color={Colors.onPrimary}
+                    size={32}
+                    color="#FFFFFF"
                     style={!isPlaying ? styles.playIconOffset : undefined}
                   />
                 </Pressable>
 
                 <Pressable hitSlop={8} onPress={() => void skipNext()} style={styles.transportButton}>
-                  <Ionicons name="play-skip-forward" size={32} color={Colors.onBackground} />
+                  <Ionicons name="play-skip-forward" size={28} color="rgba(255,255,255,0.85)" />
                 </Pressable>
               </View>
 
-              <View style={styles.actionsRow}>
+              {/* Secondary actions glass panel */}
+              <View style={styles.actionsPanel}>
                 <Animated.View style={heartAnimatedStyle}>
                   <Pressable onPress={() => void handleToggleLike()} style={styles.actionButton}>
                     <Ionicons
                       name={isLiked ? 'heart' : 'heart-outline'}
                       size={24}
-                      color={isLiked ? Colors.primary : Colors.onBackground}
+                      color={isLiked ? '#F5A623' : 'rgba(255,255,255,0.7)'}
                     />
                   </Pressable>
                 </Animated.View>
                 <Pressable onPress={() => void handleOpenPlaylists()} style={styles.actionButton}>
-                  <Ionicons name="add-circle-outline" size={24} color={Colors.onBackground} />
-                </Pressable>
-                <Pressable onPress={handleOpenQueue} style={styles.actionButton}>
-                  <Ionicons name="list-outline" size={24} color={Colors.onBackground} />
+                  <Ionicons name="add-circle-outline" size={24} color="rgba(255,255,255,0.7)" />
                 </Pressable>
                 <Pressable style={styles.actionButton} onPress={() => void handleShuffleToggle()}>
                   <Ionicons
                     name="shuffle"
                     size={24}
-                    color={shuffle ? Colors.primaryLight : Colors.onBackground}
+                    color={shuffle ? '#7C3AED' : 'rgba(255,255,255,0.7)'}
                   />
                 </Pressable>
                 <Pressable style={styles.actionButton} onPress={() => void cycleRepeatMode()}>
                   <Ionicons
                     name={repeatMode === 'one' ? 'repeat-outline' : 'repeat'}
                     size={24}
-                    color={repeatMode === 'off' ? Colors.onBackground : Colors.primaryLight}
+                    color={repeatMode === 'off' ? 'rgba(255,255,255,0.7)' : '#7C3AED'}
                   />
+                </Pressable>
+                <Pressable onPress={handleOpenQueue} style={styles.actionButton}>
+                  <Ionicons name="list-outline" size={24} color="rgba(255,255,255,0.7)" />
+                </Pressable>
+                <Pressable style={styles.actionButton} onPress={() => sleepTimerRef.current?.present()}>
+                  <Ionicons name="moon-outline" size={24} color="rgba(255,255,255,0.7)" />
                 </Pressable>
               </View>
             </View>
@@ -607,10 +677,11 @@ export default function NowPlayingScreen() {
         </Animated.View>
       </GestureDetector>
 
+      {/* Add to Playlist sheet */}
       <BottomSheetModal
         ref={playlistsSheetRef}
         snapPoints={bottomSheetSnapPoints}
-        backgroundStyle={styles.sheetBackground}
+        backgroundStyle={styles.sheetBg}
         handleIndicatorStyle={styles.sheetHandle}
       >
         <BottomSheetView style={styles.sheetContainer}>
@@ -628,14 +699,20 @@ export default function NowPlayingScreen() {
         </BottomSheetView>
       </BottomSheetModal>
 
+      {/* Queue sheet */}
       <BottomSheetModal
         ref={queueSheetRef}
         snapPoints={bottomSheetSnapPoints}
-        backgroundStyle={styles.sheetBackground}
+        backgroundStyle={styles.queueSheetBg}
         handleIndicatorStyle={styles.sheetHandle}
       >
-        <BottomSheetView style={styles.sheetContainer}>
-          <Text style={styles.sheetTitle}>Up Next</Text>
+        <BottomSheetView style={styles.queueSheetContent}>
+          <View style={styles.queueSheetHeader}>
+            <Text style={styles.queueSheetTitle}>Up Next</Text>
+            <Pressable onPress={() => void handleShuffleToggle()} style={styles.queueShuffleBtn}>
+              <Ionicons name="shuffle" size={20} color={shuffle ? '#7C3AED' : 'rgba(255,255,255,0.6)'} />
+            </Pressable>
+          </View>
           <View style={styles.queueListContainer}>
             <DraggableFlatList
               data={queue}
@@ -643,10 +720,28 @@ export default function NowPlayingScreen() {
               onDragEnd={handleQueueDragEnd}
               renderItem={renderQueueItem}
               contentContainerStyle={styles.queueListContent}
+              ListHeaderComponent={
+                currentTrack ? (
+                  <Text style={styles.queueSectionLabel}>NOW PLAYING</Text>
+                ) : undefined
+              }
             />
           </View>
         </BottomSheetView>
       </BottomSheetModal>
+
+      {/* Song options sheet */}
+      <SongOptionsSheet
+        sheetRef={songOptionsSheetRef}
+        thumbnail={thumbnailSource}
+        title={currentTrack?.title ?? ''}
+        channel={channelName}
+        onLike={() => void handleToggleLike()}
+        onAddToPlaylist={() => void handleOpenPlaylists()}
+        onShare={handleShareYouTube}
+      />
+
+      <SleepTimer sheetRef={sleepTimerRef} />
     </>
   );
 }
@@ -656,76 +751,99 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   container: {
-    backgroundColor: Colors.background,
+    backgroundColor: '#000000',
     flex: 1,
   },
   emptyState: {
-    backgroundColor: Colors.background,
+    backgroundColor: '#000000',
     flex: 1,
+  },
+  bgImageTransform: {
+    transform: [{ scale: 1.1 }],
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(18, 18, 18, 0.72)',
+    backgroundColor: 'rgba(0,0,0,0.62)',
   },
+
+  // ── Header ──
   header: {
-    alignItems: 'flex-start',
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: 4,
+    paddingHorizontal: 20,
+    paddingTop: 8,
     zIndex: 1,
   },
-  closeButton: {
+  headerBtn: {
     alignItems: 'center',
     height: 40,
     justifyContent: 'center',
     width: 40,
   },
-  content: {
+  headerLabel: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+
+  // ── Album art ──
+  artSection: {
+    alignItems: 'center',
     flex: 1,
-    justifyContent: 'space-evenly',
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xl,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
   },
   artworkWrapper: {
-    alignSelf: 'center',
     position: 'relative',
   },
   artwork: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
+    backgroundColor: '#121414',
+    borderRadius: 16,
     height: '100%',
     width: '100%',
   },
   youtubeBadge: {
     alignItems: 'center',
     backgroundColor: '#FF0000',
-    borderRadius: BorderRadius.full,
+    borderRadius: 8,
     bottom: 12,
-    height: 28,
+    height: 30,
     justifyContent: 'center',
     position: 'absolute',
     right: 12,
-    width: 28,
+    width: 30,
+  },
+
+  // ── Player controls zone ──
+  playerControls: {
+    gap: 16,
+    paddingBottom: 24,
+    paddingHorizontal: 24,
   },
   metaSection: {
-    gap: Spacing.sm,
+    gap: 4,
   },
   marqueeMask: {
     overflow: 'hidden',
     width: '100%',
   },
   title: {
-    color: Colors.onBackground,
-    fontSize: 20,
-    fontWeight: Typography.fontWeightBold,
-    textAlign: 'center',
+    color: '#e2e2e2',
+    fontSize: 24,
+    fontWeight: '700',
+    lineHeight: 30,
   },
   channelName: {
-    color: '#AAAAAA',
-    fontSize: 14,
-    textAlign: 'center',
+    color: 'rgba(204,195,216,0.75)',
+    fontSize: 16,
+    fontWeight: '400',
   },
   seekSection: {
-    gap: Spacing.xs,
+    gap: 4,
   },
   timeRow: {
     flexDirection: 'row',
@@ -733,14 +851,15 @@ const styles = StyleSheet.create({
     marginTop: -4,
   },
   timeText: {
-    color: '#AAAAAA',
+    color: 'rgba(204,195,216,0.65)',
     fontSize: 12,
+    fontWeight: '600',
   },
   controlsRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: Spacing.xl,
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
   },
   transportButton: {
     alignItems: 'center',
@@ -750,19 +869,29 @@ const styles = StyleSheet.create({
   },
   playPauseButton: {
     alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.full,
-    height: 56,
+    borderRadius: 999,
+    elevation: 8,
+    height: 64,
     justifyContent: 'center',
-    width: 56,
+    overflow: 'hidden',
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    width: 64,
   },
   playIconOffset: {
-    marginLeft: 2,
+    marginLeft: 3,
   },
-  actionsRow: {
+  actionsPanel: {
     alignItems: 'center',
+    backgroundColor: 'rgba(26,28,28,0.5)',
+    borderColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 20,
+    borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    padding: 16,
   },
   actionButton: {
     alignItems: 'center',
@@ -770,87 +899,156 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 40,
   },
-  sheetBackground: {
-    backgroundColor: Colors.surface,
+
+  // ── Queue sheet ──
+  queueSheetBg: {
+    backgroundColor: 'rgba(12,15,15,0.97)',
   },
-  sheetHandle: {
-    backgroundColor: Colors.muted,
-  },
-  sheetContainer: {
+  queueSheetContent: {
     flex: 1,
-    paddingHorizontal: Spacing.lg,
+    paddingTop: 4,
   },
-  sheetTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeLg,
-    fontWeight: Typography.fontWeightBold,
-    marginBottom: Spacing.md,
-  },
-  sheetRow: {
+  queueSheetHeader: {
     alignItems: 'center',
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.lg,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
   },
-  sheetRowTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-    fontWeight: Typography.fontWeightSemiBold,
+  queueSheetTitle: {
+    color: '#e2e2e2',
+    fontSize: 24,
+    fontWeight: '700',
   },
-  sheetRowSubtitle: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeSm,
-    marginTop: 2,
+  queueShuffleBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(40,42,43,0.5)',
+    borderRadius: 999,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
   },
-  sheetEmptyText: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeMd,
-    paddingTop: Spacing.md,
-    textAlign: 'center',
+  queueSectionLabel: {
+    color: '#7C3AED',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 1.5,
+    marginBottom: 12,
+    paddingHorizontal: 20,
+    textTransform: 'uppercase',
   },
   queueListContainer: {
     flex: 1,
   },
   queueListContent: {
-    paddingBottom: Spacing.xl,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
   },
   queueRow: {
     alignItems: 'center',
-    borderRadius: BorderRadius.lg,
+    borderRadius: 12,
     flexDirection: 'row',
-    marginBottom: Spacing.sm,
-    padding: Spacing.sm,
+    gap: 12,
+    marginBottom: 4,
+    padding: 8,
   },
-  queueThumb: {
-    backgroundColor: Colors.border,
-    borderRadius: BorderRadius.sm,
+  queueRowCurrent: {
+    backgroundColor: 'rgba(124,58,237,0.1)',
+    borderColor: 'rgba(124,58,237,0.2)',
+    borderWidth: 1,
+  },
+  queueThumbWrap: {
+    alignItems: 'center',
+    backgroundColor: '#333535',
+    borderRadius: 8,
+    flexShrink: 0,
     height: 48,
+    justifyContent: 'center',
+    overflow: 'hidden',
     width: 48,
   },
   queueMeta: {
     flex: 1,
-    marginHorizontal: Spacing.sm,
+    minWidth: 0,
   },
   queueTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-    fontWeight: Typography.fontWeightSemiBold,
+    color: '#e2e2e2',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  queueTitleCurrent: {
+    color: '#7C3AED',
   },
   queueSubtitle: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeSm,
+    color: 'rgba(204,195,216,0.7)',
+    fontSize: 14,
+    fontWeight: '500',
     marginTop: 2,
+  },
+  queueRowActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+  },
+  queueRemoveBtn: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
   },
   deleteAction: {
     alignItems: 'center',
-    backgroundColor: Colors.error,
-    borderRadius: BorderRadius.lg,
+    alignSelf: 'stretch',
+    backgroundColor: '#C62828',
+    borderRadius: 8,
     justifyContent: 'center',
-    marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
+    marginBottom: 4,
+    paddingHorizontal: 20,
+  },
+
+  // ── Playlists sheet ──
+  sheetBg: {
+    backgroundColor: '#1a1c1c',
+  },
+  sheetHandle: {
+    backgroundColor: 'rgba(74,68,85,0.5)',
+  },
+  sheetContainer: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 4,
+  },
+  sheetTitle: {
+    color: '#e2e2e2',
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  sheetRow: {
+    alignItems: 'center',
+    backgroundColor: '#1e2020',
+    borderRadius: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  sheetRowTitle: {
+    color: '#e2e2e2',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  sheetRowSubtitle: {
+    color: 'rgba(204,195,216,0.7)',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  sheetEmptyText: {
+    color: 'rgba(204,195,216,0.5)',
+    fontSize: 15,
+    paddingTop: 16,
+    textAlign: 'center',
   },
 });

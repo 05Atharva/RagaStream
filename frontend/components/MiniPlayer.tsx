@@ -9,8 +9,9 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import TrackPlayer from '../services/trackPlayerShim';
-import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
+import { togglePlayback as audioToggle } from '../services/audioPlayer';
 import { usePlayerStore } from '../store/playerStore';
+import SafeBlurView from './SafeBlurView';
 
 type MiniPlayerProps = {
   onOpenNowPlaying: () => void;
@@ -48,14 +49,8 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
   const channelName = currentTrack.channel_name || currentTrack.channelName || currentTrack.artist;
 
   const handleTogglePlay = async () => {
-    if (isPlaying) {
-      await TrackPlayer.pause();
-      usePlayerStore.setState({ isPlaying: false });
-      return;
-    }
-
-    await TrackPlayer.play();
-    usePlayerStore.setState({ isPlaying: true });
+    const nowPlaying = await audioToggle();
+    usePlayerStore.setState({ isPlaying: nowPlaying });
   };
 
   const handleNext = async () => {
@@ -68,13 +63,25 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
 
   return (
     <Animated.View style={[styles.container, animatedStyle]}>
+      {/* Glass backdrop — 24px blur per DESIGN.md, dark tint */}
+      <SafeBlurView
+        blurAmount={24}
+        blurType="dark"
+        style={StyleSheet.absoluteFillObject}
+      />
+
+      {/* Top-edge progress line — decorative indicator per DESIGN.md */}
+      <View style={styles.progressTrack} pointerEvents="none">
+        <View style={styles.progressFill} />
+      </View>
+
+      {/* Track info — full tap target opens Now Playing */}
       <Pressable style={styles.trackArea} onPress={onOpenNowPlaying}>
         <Image
           source={thumbnailSource ? { uri: thumbnailSource } : undefined}
           style={styles.thumbnail}
           contentFit="cover"
         />
-
         <View style={styles.textContainer}>
           <Text numberOfLines={1} style={styles.title}>
             {currentTrack.title}
@@ -83,21 +90,21 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
             {channelName}
           </Text>
         </View>
-
-        <View style={styles.spacer} />
       </Pressable>
 
-      <Pressable hitSlop={8} onPress={() => void handleTogglePlay()} style={styles.iconButton}>
-        <Ionicons
-          name={isPlaying ? 'pause' : 'play'}
-          size={20}
-          color={Colors.onBackground}
-        />
-      </Pressable>
-
-      <Pressable hitSlop={8} onPress={() => void handleNext()} style={styles.iconButton}>
-        <Ionicons name="play-skip-forward" size={20} color={Colors.onBackground} />
-      </Pressable>
+      {/* Playback controls */}
+      <View style={styles.controls}>
+        <Pressable hitSlop={10} onPress={() => void handleTogglePlay()}>
+          <Ionicons
+            name={isPlaying ? 'pause' : 'play'}
+            size={24}
+            color="#FFFFFF"
+          />
+        </Pressable>
+        <Pressable hitSlop={10} onPress={() => void handleNext()}>
+          <Ionicons name="play-skip-forward" size={24} color="#FFFFFF" />
+        </Pressable>
+      </View>
     </Animated.View>
   );
 }
@@ -106,48 +113,73 @@ export { MINI_PLAYER_HEIGHT };
 
 const styles = StyleSheet.create({
   container: {
+    // Geometry — height must stay 64 to match MINI_PLAYER_HEIGHT export
     alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderTopColor: Colors.border,
-    borderTopWidth: 1,
     flexDirection: 'row',
     height: MINI_PLAYER_HEIGHT,
-    paddingHorizontal: Spacing.xs,
+    marginHorizontal: 8,
+    overflow: 'hidden',
+    paddingHorizontal: 12,
+    gap: 12,
+    // Glass border — DESIGN.md: 1px white ~10% opacity top edge (full border here for card feel)
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    // Shadow beneath — DESIGN.md glass elevation
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 16,
+  },
+  progressTrack: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  progressFill: {
+    // Static width — dynamic progress wiring belongs in a future NowPlaying pass
+    width: '35%',
+    height: 2,
+    backgroundColor: '#7C3AED',
+    borderTopRightRadius: 999,
+    borderBottomRightRadius: 999,
   },
   trackArea: {
     alignItems: 'center',
     flex: 1,
     flexDirection: 'row',
+    gap: 12,
     minHeight: '100%',
   },
   thumbnail: {
-    backgroundColor: Colors.border,
-    borderRadius: BorderRadius.sm,
-    height: 56,
-    width: 56,
+    borderRadius: 8,
+    height: 44,
+    width: 44,
   },
   textContainer: {
-    marginLeft: Spacing.sm,
+    flex: 1,
+    justifyContent: 'center',
     minWidth: 0,
   },
   title: {
-    color: Colors.onBackground,
+    color: '#FFFFFF',
     fontSize: 14,
-    fontWeight: Typography.fontWeightSemiBold,
+    fontWeight: '600',
+    lineHeight: 18,
   },
   subtitle: {
-    color: '#999999',
+    color: 'rgba(255,255,255,0.7)',
     fontSize: 12,
     marginTop: 2,
   },
-  spacer: {
-    flex: 1,
-  },
-  iconButton: {
+  controls: {
     alignItems: 'center',
-    height: 32,
-    justifyContent: 'center',
-    marginLeft: Spacing.xs,
-    width: 32,
+    flexDirection: 'row',
+    gap: 16,
+    paddingRight: 4,
   },
 });
