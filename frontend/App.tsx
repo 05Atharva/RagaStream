@@ -3,15 +3,29 @@ import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, NativeModules, StyleSheet, View } from 'react-native';
+import { NativeModules, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import AuthGate from './components/AuthGate';
+import SplashScreen from './screens/SplashScreen';
 import { Colors } from './constants/theme';
 import RootNavigator from './navigation/RootNavigator';
 import { supabase } from './services/supabase';
 import { useAuthStore } from './store/authStore';
+
+// Configure Google Sign-In if native module is available
+try {
+  const { GoogleSignin } = require('@react-native-google-signin/google-signin');
+  GoogleSignin.configure({
+    // ⚠️ IMPORTANT: Replace with your actual Web Client ID from Google Cloud Console.
+    // This is the *Web* client (not Android client) that matches your Supabase Google provider config.
+    webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+    offlineAccess: true,
+  });
+} catch {
+  // Native module unavailable (Expo Go) — Google sign-in won't work.
+}
 
 // react-native-track-player is not available in Expo Go; import
 // dynamically so the rest of the app still works without native builds.
@@ -129,9 +143,7 @@ export default function App() {
             <NavigationContainer theme={RagaStreamTheme}>
               <StatusBar style="light" backgroundColor={Colors.background} />
               {!hasHydrated ? (
-                <View style={styles.loadingScreen}>
-                  <ActivityIndicator color={Colors.primary} size="large" />
-                </View>
+                <SplashScreen />
               ) : session ? (
                 <RootNavigator />
               ) : (
@@ -149,11 +161,5 @@ export default function App() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-  },
-  loadingScreen: {
-    alignItems: 'center',
-    backgroundColor: Colors.background,
-    flex: 1,
-    justifyContent: 'center',
   },
 });

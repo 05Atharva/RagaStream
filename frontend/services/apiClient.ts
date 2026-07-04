@@ -7,6 +7,7 @@ export const apiClient = axios.create({
   baseURL,
 });
 
+// ── Request: attach Supabase Bearer token ─────────────────────────────────────
 apiClient.interceptors.request.use(async (config) => {
   if (!supabase) {
     return config;
@@ -22,3 +23,25 @@ apiClient.interceptors.request.use(async (config) => {
 
   return config;
 });
+
+// ── Response: auto sign-out when the server returns 401 ───────────────────────
+// This happens when the Supabase session token has expired (e.g. after
+// Supabase project was paused). Signing out clears local state and lets
+// App.tsx's onAuthStateChange navigate back to the login screen.
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error: unknown) => {
+    if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 401 &&
+      supabase
+    ) {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // ignore — session already gone
+      }
+    }
+    return Promise.reject(error);
+  }
+);

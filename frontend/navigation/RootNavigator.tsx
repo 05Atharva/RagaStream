@@ -1,6 +1,7 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import BottomTabNavigator from './BottomTabNavigator';
+import ChannelScreen from '../screens/ChannelScreen';
 import LikedSongsScreen from '../screens/LikedSongsScreen';
 import NowPlayingScreen from '../screens/NowPlayingScreen';
 import PlaylistScreen from '../screens/PlaylistScreen';
@@ -12,6 +13,7 @@ export type RootStackParamList = {
   Settings: undefined;
   LikedSongs: undefined;
   Playlist: { playlistId: string };
+  Channel: { channelName: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -23,6 +25,7 @@ export default function RootNavigator() {
       <Stack.Screen name="Settings" component={SettingsScreen} />
       <Stack.Screen name="LikedSongs" component={LikedSongsScreen} />
       <Stack.Screen name="Playlist" component={PlaylistScreen} />
+      <Stack.Screen name="Channel" component={ChannelScreen} />
       <Stack.Screen
         name="NowPlaying"
         component={NowPlayingScreen}

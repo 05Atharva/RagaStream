@@ -4,6 +4,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MiniPlayer, { MINI_PLAYER_HEIGHT } from '../components/MiniPlayer';
 import { Colors } from '../constants/theme';
 import type { RootStackParamList } from './RootNavigator';
@@ -33,6 +34,10 @@ export default function BottomTabNavigator() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const isMiniPlayerVisible = currentTrack !== null;
+  const insets = useSafeAreaInsets();
+
+  // The system navigation bar inset — ensures nothing overlaps Android's nav bar
+  const bottomInset = insets.bottom;
 
   return (
     <View style={styles.container}>
@@ -46,7 +51,7 @@ export default function BottomTabNavigator() {
             backgroundColor: Colors.surface,
             borderTopColor: Colors.border,
             borderTopWidth: 1,
-            bottom: isMiniPlayerVisible ? MINI_PLAYER_HEIGHT : 0,
+            bottom: bottomInset + (isMiniPlayerVisible ? MINI_PLAYER_HEIGHT : 0),
             height: TAB_BAR_HEIGHT,
             left: 0,
             paddingBottom: 4,
@@ -74,7 +79,7 @@ export default function BottomTabNavigator() {
       </Tab.Navigator>
 
       {isMiniPlayerVisible ? (
-        <View style={styles.miniPlayerContainer}>
+        <View style={[styles.miniPlayerContainer, { bottom: bottomInset }]}>
           <MiniPlayer onOpenNowPlaying={() => navigation.navigate('NowPlaying')} />
         </View>
       ) : null}
@@ -88,7 +93,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   miniPlayerContainer: {
-    bottom: 0,
     left: 0,
     position: 'absolute',
     right: 0,
