@@ -21,6 +21,7 @@ class YouTubeSearchResult(BaseModel):
 class YouTubeStreamResponse(BaseModel):
     stream_url: str
     title: str
+    channel: str
     duration: int
     thumbnail: str
     expires_in: int        # seconds until cache expiry

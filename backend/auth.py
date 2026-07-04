@@ -1,48 +1,54 @@
 """
 JWT authentication helpers for Supabase-issued access tokens.
+
+Uses a direct HTTP call to Supabase Auth API (GET /auth/v1/user) to verify
+tokens.  This avoids using supabase-py's auth.get_user() which mutates
+internal HTTP headers and contaminates the service_role client, causing
+'permission denied' (42501) errors on subsequent DB queries.
 """
 from __future__ import annotations
 
 import os
 from typing import Optional
 
+import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+from dotenv import load_dotenv
 
 from db import get_supabase
 
+load_dotenv()
+
 bearer_scheme = HTTPBearer(auto_error=False)
 
+# Supabase project URL and anon/service key for the apikey header
+_SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+_SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
-def _decode_access_token(token: str) -> dict:
-    secret = os.environ.get("SUPABASE_JWT_SECRET")
-    if not secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SUPABASE_JWT_SECRET is not configured.",
-        )
 
-    try:
-        return jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-    except JWTError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token.",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+async def _verify_token(token: str) -> dict | None:
+    """
+    Verify a Supabase access token via direct HTTP call.
+    Returns the user dict on success, None on failure.
+    """
+    url = f"{_SUPABASE_URL}/auth/v1/user"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "apikey": _SUPABASE_KEY,
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code == 200:
+            return resp.json()
+    return None
 
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> dict:
     """
-    Validate the Bearer token and return the authenticated user id.
+    Validate the Bearer token via Supabase and return the authenticated user id.
     """
     if not credentials:
         raise HTTPException(
@@ -51,16 +57,15 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = _decode_access_token(credentials.credentials)
-    user_id = payload.get("sub")
-    if not isinstance(user_id, str) or not user_id:
+    user_data = await _verify_token(credentials.credentials)
+    if not user_data or "id" not in user_data:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload.",
+            detail="Invalid or expired token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return {"user_id": user_id}
+    return {"user_id": user_data["id"]}
 
 
 async def get_current_admin(user: dict = Depends(get_current_user)) -> dict:

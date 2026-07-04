@@ -34,7 +34,7 @@ async def list_songs(
     return result.data or []
 
 
-@genres_router.get("/genres", response_model=List[GenreCountResponse])
+@genres_router.get("", response_model=List[GenreCountResponse])
 async def list_genres():
     """Return each genre and its song count."""
     supabase = get_supabase()

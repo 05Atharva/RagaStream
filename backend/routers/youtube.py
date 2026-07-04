@@ -173,6 +173,7 @@ async def get_stream_url(
             return {
                 "stream_url": stream_url,
                 "title": info.get("title", "Unknown"),
+                "channel": info.get("channel") or info.get("uploader") or "Unknown",
                 "duration": _duration_int(info.get("duration")),
                 "thumbnail": _safe_thumb(info.get("thumbnails"))
                              or info.get("thumbnail", ""),
