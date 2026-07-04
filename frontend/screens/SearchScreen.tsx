@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
+  FlatList,
   Linking,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -15,14 +18,16 @@ import { BottomSheetFlatList, BottomSheetModal, BottomSheetView } from '@gorhom/
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import TrackPlayer from '../services/trackPlayerShim';
+import { LinearGradient } from 'expo-linear-gradient';
 import { playTrack } from '../services/audioPlayer';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { ensureSongInCatalogue } from '../services/songService';
-import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
+import { recordPlayHistory } from '../services/historyService';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import { usePlayerStore, type Track } from '../store/playerStore';
+import { useBottomPadding } from '../hooks/useBottomPadding';
+import SongOptionsSheet from '../components/SongOptionsSheet';
 
 type Props = BottomTabScreenProps<BottomTabParamList, 'Search'>;
 
@@ -49,25 +54,30 @@ type PlaylistRecord = {
   songs?: SongRecord[];
 };
 
-const GENRE_CARDS = [
-  { label: 'Bollywood', color: '#FF6B6B' },
-  { label: 'Classical', color: '#4ECDC4' },
-  { label: 'Folk', color: '#45B7D1' },
-  { label: 'Devotional', color: '#FFA07A' },
-  { label: 'Indie', color: '#98D8C8' },
-  { label: 'Punjabi', color: '#FFD93D' },
-  { label: 'Ghazals', color: '#C084FC' },
-  { label: 'Sufi', color: '#86EFAC' },
-] as const;
+type GenreCard = { label: string; colors: string[]; overlay?: boolean };
 
+const GENRE_CARDS: GenreCard[] = [
+  { label: 'Bollywood', colors: ['#FF416C', '#FF4B2B'] },
+  { label: 'Classical', colors: ['#4776E6', '#8E54E9'] },
+  { label: 'Folk', colors: ['#11998e', '#38ef7d'] },
+  { label: 'Devotional', colors: ['#F2994A', '#F2C94C'] },
+  { label: 'Indie', colors: ['#8E2DE2', '#4A00E0'] },
+  { label: 'Punjabi', colors: ['#b20a2c', '#fffbd5'], overlay: true },
+  { label: 'Ghazals', colors: ['#0F2027', '#203A43', '#2C5364'] },
+  { label: 'Sufi', colors: ['#1c92d2', '#f2fcfe'], overlay: true },
+  { label: 'Trending', colors: ['#ED213A', '#93291E'] },
+];
+
+const SUGGESTED_TAGS = ['Classical Fusion', 'Morning Raags', 'Sitar Covers'];
 const SEARCH_DEBOUNCE_MS = 300;
 const MIN_SEARCH_CHARS = 2;
+const CONTENT_PADDING = 20;
+const GENRE_CARD_GAP = 12;
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const GENRE_CARD_SIZE = (SCREEN_WIDTH - CONTENT_PADDING * 2 - GENRE_CARD_GAP) / 2;
 
 function formatTime(value: number) {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '0:00';
-  }
-
+  if (!Number.isFinite(value) || value <= 0) return '0:00';
   const totalSeconds = Math.floor(value);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -96,33 +106,21 @@ export default function SearchScreen({ route, navigation }: Props) {
   }, [route.params?.initialQuery]);
 
   useEffect(() => {
-    if (debounceTimer.current) {
-      clearTimeout(debounceTimer.current);
-    }
-
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
     const trimmed = searchText.trim();
-
     if (trimmed.length < MIN_SEARCH_CHARS) {
       setDebouncedQuery('');
       return;
     }
-
     debounceTimer.current = setTimeout(() => {
       setDebouncedQuery(trimmed);
     }, SEARCH_DEBOUNCE_MS);
-
     return () => {
-      if (debounceTimer.current) {
-        clearTimeout(debounceTimer.current);
-      }
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
   }, [searchText]);
 
-  const {
-    data: results,
-    isLoading,
-    isFetching,
-  } = useQuery({
+  const { data: results, isLoading, isFetching } = useQuery({
     queryKey: ['youtube-search', debouncedQuery],
     enabled: debouncedQuery.length >= MIN_SEARCH_CHARS,
     queryFn: async ({ signal }) => {
@@ -134,33 +132,23 @@ export default function SearchScreen({ route, navigation }: Props) {
     },
   });
 
-  const snapPoints = useMemo(() => ['30%', '48%'], []);
   const playlistSnapPoints = useMemo(() => ['50%', '75%'], []);
 
   const handlePlayResult = async (item: YouTubeSearchResult) => {
-    if (isRowLoading) {
-      return;
-    }
-
+    if (isRowLoading) return;
     setIsRowLoading(item.youtube_id);
-
-    // Save to catalogue in background — don't block playback on it
     const cataloguePromise = ensureSongInCatalogue({
       youtube_id: item.youtube_id,
       title: item.title,
       channel_name: item.channel,
       thumbnail_url: item.thumbnail,
       duration_sec: item.duration,
-    }).catch(() => item.youtube_id); // fallback to youtube_id if save fails
-
+    }).catch(() => item.youtube_id);
     try {
       const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
         params: { id: item.youtube_id },
       });
-
-      // Resolve catalogue ID (may already be done, or still in flight)
       const songId = await cataloguePromise;
-
       const track: Track = {
         id: songId,
         title: item.title,
@@ -173,24 +161,13 @@ export default function SearchScreen({ route, navigation }: Props) {
         channelName: item.channel,
         thumbnailUrl: item.thumbnail,
       };
-
-      // playTrack uses expo-av in Expo Go, RNTP in native builds
       await playTrack(track);
-
-      usePlayerStore.setState({
-        currentTrack: track,
-        queue: [track],
-        isPlaying: true,
-      });
-
+      usePlayerStore.setState({ currentTrack: track, queue: [track], isPlaying: true });
+      void recordPlayHistory(songId);
       navigation.getParent()?.navigate('NowPlaying');
     } catch (err) {
       console.error('[SearchScreen] playback error:', err);
-      Toast.show({
-        type: 'error',
-        text1: 'Could not start playback',
-        text2: 'Stream unavailable — try another song',
-      });
+      Toast.show({ type: 'error', text1: 'Could not start playback', text2: 'Stream unavailable — try another song' });
     } finally {
       setIsRowLoading(null);
     }
@@ -202,9 +179,7 @@ export default function SearchScreen({ route, navigation }: Props) {
   };
 
   const handleLike = async () => {
-    if (!selectedResult) {
-      return;
-    }
+    if (!selectedResult) return;
     try {
       const songId = await ensureSongInCatalogue({
         youtube_id: selectedResult.youtube_id,
@@ -221,9 +196,7 @@ export default function SearchScreen({ route, navigation }: Props) {
   };
 
   const handleAddToQueue = async () => {
-    if (!selectedResult) {
-      return;
-    }
+    if (!selectedResult) return;
     try {
       const songId = await ensureSongInCatalogue({
         youtube_id: selectedResult.youtube_id,
@@ -275,15 +248,11 @@ export default function SearchScreen({ route, navigation }: Props) {
   const handleOpenPlaylistSheet = async () => {
     menuSheetRef.current?.dismiss();
     playlistSheetRef.current?.present();
-    if (playlists.length === 0) {
-      await loadPlaylists();
-    }
+    if (playlists.length === 0) await loadPlaylists();
   };
 
   const handleAddToPlaylist = async (playlist: PlaylistRecord) => {
-    if (!selectedResult) {
-      return;
-    }
+    if (!selectedResult) return;
     try {
       const songId = await ensureSongInCatalogue({
         youtube_id: selectedResult.youtube_id,
@@ -301,9 +270,7 @@ export default function SearchScreen({ route, navigation }: Props) {
   };
 
   const handleShare = () => {
-    if (!selectedResult) {
-      return;
-    }
+    if (!selectedResult) return;
     Linking.openURL(`https://www.youtube.com/watch?v=${selectedResult.youtube_id}`);
   };
 
@@ -312,132 +279,191 @@ export default function SearchScreen({ route, navigation }: Props) {
     setDebouncedQuery(genre);
   };
 
-  const renderResultItem = ({ item }: { item: YouTubeSearchResult }) => {
-    const isActive = item.youtube_id === currentTrack?.youtubeId || item.youtube_id === currentTrack?.youtube_id;
-    const isLoadingRow = isRowLoading === item.youtube_id;
+  const renderGenreCard = ({ item }: { item: GenreCard }) => (
+    <Pressable
+      style={({ pressed }) => [styles.genreCard, pressed && styles.cardPressed]}
+      onPress={() => handleGenrePress(item.label)}
+    >
+      <LinearGradient
+        colors={item.colors as [string, string, ...string[]]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.genreGradient}
+      >
+        {item.overlay && <View style={styles.cardOverlay} />}
+        <Text style={styles.genreCardLabel}>{item.label}</Text>
+      </LinearGradient>
+    </Pressable>
+  );
 
+  const renderResultItem = ({ item }: { item: YouTubeSearchResult }) => {
+    const isActive =
+      item.youtube_id === currentTrack?.youtubeId ||
+      item.youtube_id === (currentTrack as Record<string, unknown>)?.youtube_id;
+    const isLoadingRow = isRowLoading === item.youtube_id;
     return (
-      <Pressable style={styles.resultRow} onPress={() => void handlePlayResult(item)}>
-        <Image source={{ uri: item.thumbnail }} style={styles.resultThumb} contentFit="cover" />
+      <Pressable
+        style={({ pressed }) => [styles.resultRow, pressed && styles.cardPressed]}
+        onPress={() => void handlePlayResult(item)}
+      >
+        <View style={styles.resultThumbWrap}>
+          <Image source={{ uri: item.thumbnail }} style={styles.resultThumb} contentFit="cover" />
+          {isLoadingRow && (
+            <View style={styles.thumbSpinner}>
+              <ActivityIndicator color="#7C3AED" size="small" />
+            </View>
+          )}
+        </View>
         <View style={styles.resultMeta}>
-          <Text numberOfLines={1} style={styles.resultTitle}>
+          <Text numberOfLines={1} style={[styles.resultTitle, isActive && styles.resultTitleActive]}>
             {item.title}
           </Text>
           <Text numberOfLines={1} style={styles.resultSubtitle}>
-            {item.channel}
+            {item.channel} · {formatTime(item.duration)}
           </Text>
         </View>
-        <Text style={styles.resultDuration}>{formatTime(item.duration)}</Text>
-        {isLoadingRow ? (
-          <ActivityIndicator color={Colors.primary} style={styles.resultAction} />
-        ) : (
-          <Pressable onPress={() => handleOpenMenu(item)} style={styles.resultAction}>
-            <Ionicons name="ellipsis-horizontal" size={20} color={Colors.onBackground} />
-          </Pressable>
-        )}
-        {isActive ? <View style={styles.activeDot} /> : null}
+        <Pressable onPress={() => handleOpenMenu(item)} style={styles.menuBtn} hitSlop={10}>
+          <Ionicons name="ellipsis-vertical" size={20} color="rgba(255,255,255,0.45)" />
+        </Pressable>
       </Pressable>
     );
   };
 
-  const renderGenreCard = ({ item }: { item: (typeof GENRE_CARDS)[number] }) => (
-    <Pressable style={[styles.genreCard, { backgroundColor: item.color }]} onPress={() => handleGenrePress(item.label)}>
-      <Ionicons name="musical-notes" size={20} color="#141414" />
-      <Text style={styles.genreCardText}>{item.label}</Text>
-    </Pressable>
-  );
-
   const renderPlaylistItem = ({ item }: { item: PlaylistRecord }) => (
-    <Pressable onPress={() => void handleAddToPlaylist(item)} style={styles.sheetRow}>
-      <View>
-        <Text style={styles.sheetRowTitle}>{item.name}</Text>
-        <Text style={styles.sheetRowSubtitle}>{item.songs?.length ?? 0} songs</Text>
+    <Pressable
+      onPress={() => void handleAddToPlaylist(item)}
+      style={({ pressed }) => [styles.playlistRow, pressed && styles.cardPressed]}
+    >
+      <View style={styles.playlistRowText}>
+        <Text style={styles.playlistRowTitle}>{item.name}</Text>
+        <Text style={styles.playlistRowSubtitle}>{item.songs?.length ?? 0} songs</Text>
       </View>
-      <Ionicons name="add-circle-outline" size={20} color={Colors.onBackground} />
+      <Ionicons name="add-circle-outline" size={22} color="rgba(255,255,255,0.7)" />
     </Pressable>
   );
 
-  const showDefaultState = searchText.trim().length === 0;
+  const bottomPadding = useBottomPadding();
+
+  const showDefaultState = searchText.trim().length < MIN_SEARCH_CHARS;
+  const showNoResults =
+    !showDefaultState &&
+    !isLoading &&
+    !isFetching &&
+    results !== undefined &&
+    results.length === 0;
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* ── Search bar ── */}
       <View style={styles.header}>
-        <TextInput
-          value={searchText}
-          onChangeText={setSearchText}
-          placeholder="Search songs, artists, genres"
-          placeholderTextColor={Colors.muted}
-          style={styles.input}
-        />
+        <View style={styles.searchBar}>
+          <Ionicons
+            name="search-outline"
+            size={18}
+            color="rgba(255,255,255,0.45)"
+            style={styles.searchIcon}
+          />
+          <TextInput
+            value={searchText}
+            onChangeText={setSearchText}
+            placeholder="Search songs, artists, genres"
+            placeholderTextColor="rgba(255,255,255,0.45)"
+            style={styles.searchInput}
+            returnKeyType="search"
+            autoCorrect={false}
+          />
+          {searchText.length > 0 && (
+            <Pressable onPress={() => setSearchText('')} hitSlop={8} style={styles.clearBtn}>
+              <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.45)" />
+            </Pressable>
+          )}
+        </View>
       </View>
 
+      {/* ── State: Default — gradient genre grid ── */}
       {showDefaultState ? (
-        <FlashList
+        <FlatList
           data={GENRE_CARDS}
-          numColumns={3}
+          numColumns={2}
           keyExtractor={(item) => item.label}
-          estimatedItemSize={120}
-          contentContainerStyle={styles.genreGrid}
+          columnWrapperStyle={styles.genreRow}
+          contentContainerStyle={[styles.genreGrid, { paddingBottom: bottomPadding }]}
+          showsVerticalScrollIndicator={false}
+          ListHeaderComponent={<Text style={styles.browseHeader}>Browse all</Text>}
           renderItem={renderGenreCard}
         />
-      ) : (
-        <View style={styles.resultsContainer}>
-          {isLoading || isFetching ? (
-            <View style={styles.loadingState}>
-              <ActivityIndicator color={Colors.primary} />
+      ) : showNoResults ? (
+        /* ── State: No results — centered empty layout ── */
+        <ScrollView
+          contentContainerStyle={[styles.noResultsContent, { paddingBottom: bottomPadding }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.noResultsIconWrap}>
+            <View style={styles.noResultsGlow} />
+            <Ionicons name="search-outline" size={88} color="rgba(255,255,255,0.12)" />
+          </View>
+          <Text style={styles.noResultsTitle}>No results for "{debouncedQuery}"</Text>
+          <Text style={styles.noResultsSubtitle}>
+            Try a different search term or explore our curated playlists.
+          </Text>
+          <View style={styles.suggestedSection}>
+            <Text style={styles.suggestedLabel}>SUGGESTED TAGS</Text>
+            <View style={styles.suggestedTags}>
+              {SUGGESTED_TAGS.map((tag) => (
+                <Pressable
+                  key={tag}
+                  style={({ pressed }) => [styles.suggestedTag, pressed && styles.cardPressed]}
+                  onPress={() => handleGenrePress(tag)}
+                >
+                  <Text style={styles.suggestedTagText}>{tag}</Text>
+                </Pressable>
+              ))}
             </View>
-          ) : null}
-
+          </View>
+        </ScrollView>
+      ) : (
+        /* ── State: Results list ── */
+        <View style={styles.resultsWrap}>
+          {(isLoading || isFetching) && (
+            <View style={styles.fetchingRow}>
+              <ActivityIndicator color="#7C3AED" size="small" />
+            </View>
+          )}
           <FlashList
             data={results ?? []}
             keyExtractor={(item) => item.youtube_id}
-            estimatedItemSize={88}
             renderItem={renderResultItem}
-            contentContainerStyle={styles.resultsList}
-            ListEmptyComponent={
-              debouncedQuery.length >= MIN_SEARCH_CHARS && !isLoading ? (
-                <Text style={styles.emptyText}>No results for "{debouncedQuery}".</Text>
+            contentContainerStyle={[styles.resultsList, { paddingBottom: bottomPadding }]}
+            ListHeaderComponent={
+              (results?.length ?? 0) > 0 ? (
+                <Text style={styles.resultsHeader}>Top Results</Text>
               ) : null
             }
           />
         </View>
       )}
 
-      <BottomSheetModal
-        ref={menuSheetRef}
-        snapPoints={snapPoints}
-        backgroundStyle={styles.sheetBackground}
-        handleIndicatorStyle={styles.sheetHandle}
-      >
-        <BottomSheetView style={styles.sheetContainer}>
-          <Text style={styles.sheetTitle}>{selectedResult?.title ?? 'Song actions'}</Text>
-          <Pressable style={styles.sheetAction} onPress={() => void handleLike()}>
-            <Ionicons name="heart-outline" size={20} color={Colors.onBackground} />
-            <Text style={styles.sheetActionText}>Like</Text>
-          </Pressable>
-          <Pressable style={styles.sheetAction} onPress={() => void handleAddToQueue()}>
-            <Ionicons name="add-outline" size={20} color={Colors.onBackground} />
-            <Text style={styles.sheetActionText}>Add to Queue</Text>
-          </Pressable>
-          <Pressable style={styles.sheetAction} onPress={() => void handleOpenPlaylistSheet()}>
-            <Ionicons name="musical-notes-outline" size={20} color={Colors.onBackground} />
-            <Text style={styles.sheetActionText}>Add to Playlist</Text>
-          </Pressable>
-          <Pressable style={styles.sheetAction} onPress={handleShare}>
-            <Ionicons name="share-social-outline" size={20} color={Colors.onBackground} />
-            <Text style={styles.sheetActionText}>Share</Text>
-          </Pressable>
-        </BottomSheetView>
-      </BottomSheetModal>
+      {/* ── Song options bottom sheet ── */}
+      <SongOptionsSheet
+        sheetRef={menuSheetRef}
+        thumbnail={selectedResult?.thumbnail}
+        title={selectedResult?.title ?? ''}
+        channel={selectedResult?.channel ?? ''}
+        onLike={() => void handleLike()}
+        onAddToPlaylist={() => void handleOpenPlaylistSheet()}
+        onAddToQueue={() => void handleAddToQueue()}
+        onShare={handleShare}
+      />
 
+      {/* ── Playlist picker bottom sheet ── */}
       <BottomSheetModal
         ref={playlistSheetRef}
         snapPoints={playlistSnapPoints}
-        backgroundStyle={styles.sheetBackground}
+        backgroundStyle={styles.sheetBg}
         handleIndicatorStyle={styles.sheetHandle}
       >
         <BottomSheetView style={styles.sheetContainer}>
-          <Text style={styles.sheetTitle}>Add To Playlist</Text>
+          <Text style={styles.sheetPickerTitle}>Add To Playlist</Text>
           <BottomSheetFlatList
             data={playlists}
             keyExtractor={(item) => item.id}
@@ -455,156 +481,206 @@ export default function SearchScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    backgroundColor: Colors.background,
-    flex: 1,
-  },
+  container: { backgroundColor: '#000000', flex: 1 },
+
+  // ── Search bar ──
   header: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.sm,
+    paddingBottom: 12,
+    paddingHorizontal: CONTENT_PADDING,
+    paddingTop: 12,
   },
-  input: {
-    backgroundColor: Colors.surface,
-    borderColor: Colors.border,
-    borderRadius: BorderRadius.lg,
+  searchBar: {
+    alignItems: 'center',
+    backgroundColor: '#282a2b',
+    borderColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 999,
     borderWidth: 1,
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
+    flexDirection: 'row',
+    height: 44,
+    paddingHorizontal: 14,
   },
-  genreGrid: {
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xl,
+  searchIcon: { marginRight: 8 },
+  searchInput: {
+    color: '#FFFFFF',
+    flex: 1,
+    fontSize: 15,
+  },
+  clearBtn: { marginLeft: 6 },
+
+  // ── Browse / genre grid ──
+  genreGrid: { paddingHorizontal: CONTENT_PADDING },
+  genreRow: { gap: GENRE_CARD_GAP },
+  browseHeader: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '700',
+    marginBottom: 16,
+    marginTop: 8,
   },
   genreCard: {
-    alignItems: 'center',
-    borderRadius: BorderRadius.lg,
-    flex: 1,
-    marginBottom: Spacing.md,
-    marginHorizontal: Spacing.xs,
-    minHeight: 96,
-    justifyContent: 'center',
-    gap: 8,
+    borderRadius: 12,
+    height: GENRE_CARD_SIZE,
+    marginBottom: GENRE_CARD_GAP,
+    overflow: 'hidden',
+    width: GENRE_CARD_SIZE,
   },
-  genreCardText: {
-    color: '#141414',
-    fontSize: Typography.fontSizeSm,
-    fontWeight: Typography.fontWeightBold,
+  genreGradient: { flex: 1 },
+  cardOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  genreCardLabel: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '600',
+    left: 12,
+    position: 'absolute',
+    top: 12,
+  },
+
+  // ── No-results state ──
+  noResultsContent: {
+    alignItems: 'center',
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: CONTENT_PADDING,
+    paddingTop: 40,
+  },
+  noResultsIconWrap: {
+    alignItems: 'center',
+    height: 140,
+    justifyContent: 'center',
+    marginBottom: 28,
+    width: 140,
+  },
+  noResultsGlow: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(124,58,237,0.08)',
+    borderRadius: 999,
+  },
+  noResultsTitle: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 10,
     textAlign: 'center',
   },
-  resultsContainer: {
-    flex: 1,
+  noResultsSubtitle: {
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: 15,
+    lineHeight: 22,
+    marginBottom: 36,
+    textAlign: 'center',
   },
-  loadingState: {
-    paddingVertical: Spacing.md,
+  suggestedSection: { alignItems: 'center', width: '100%' },
+  suggestedLabel: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1.5,
+    marginBottom: 14,
+    textAlign: 'center',
   },
-  resultsList: {
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: 140,
+  suggestedTags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    justifyContent: 'center',
+  },
+  suggestedTag: {
+    backgroundColor: '#1a1c1c',
+    borderColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  suggestedTagText: { color: '#e2e2e2', fontSize: 14, fontWeight: '500' },
+
+  // ── Results state ──
+  resultsWrap: { flex: 1 },
+  fetchingRow: {
+    alignItems: 'center',
+    paddingHorizontal: CONTENT_PADDING,
+    paddingVertical: 8,
+  },
+  resultsList: { paddingHorizontal: CONTENT_PADDING },
+  resultsHeader: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 12,
+    marginTop: 8,
   },
   resultRow: {
     alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.lg,
+    borderRadius: 8,
     flexDirection: 'row',
-    marginBottom: Spacing.sm,
-    padding: Spacing.sm,
+    gap: 12,
+    marginBottom: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
   },
-  resultThumb: {
-    borderRadius: BorderRadius.sm,
+  resultThumbWrap: {
+    borderRadius: 8,
+    flexShrink: 0,
     height: 56,
+    overflow: 'hidden',
     width: 56,
   },
-  resultMeta: {
-    flex: 1,
-    marginLeft: Spacing.sm,
+  resultThumb: { height: 56, width: 56 },
+  thumbSpinner: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
   },
-  resultTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-    fontWeight: Typography.fontWeightBold,
-  },
+  resultMeta: { flex: 1, minWidth: 0 },
+  resultTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  resultTitleActive: { color: '#7C3AED' },
   resultSubtitle: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeSm,
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: 13,
+    fontWeight: '500',
     marginTop: 2,
   },
-  resultDuration: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeSm,
-    marginRight: Spacing.sm,
-  },
-  resultAction: {
+  menuBtn: {
     alignItems: 'center',
-    height: 32,
+    height: 36,
     justifyContent: 'center',
-    width: 32,
+    width: 36,
   },
-  activeDot: {
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.full,
-    height: 6,
-    marginLeft: Spacing.xs,
-    width: 6,
+
+  // ── Bottom sheets ──
+  sheetBg: { backgroundColor: '#121414' },
+  sheetHandle: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  sheetContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 4 },
+  sheetPickerTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 16,
   },
-  emptyText: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeMd,
-    paddingVertical: Spacing.md,
-    textAlign: 'center',
-  },
-  sheetBackground: {
-    backgroundColor: Colors.surface,
-  },
-  sheetHandle: {
-    backgroundColor: Colors.muted,
-  },
-  sheetContainer: {
-    flex: 1,
-    paddingHorizontal: Spacing.lg,
-  },
-  sheetTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeLg,
-    fontWeight: Typography.fontWeightBold,
-    marginBottom: Spacing.md,
-  },
-  sheetAction: {
+  playlistRow: {
     alignItems: 'center',
-    flexDirection: 'row',
-    gap: Spacing.md,
-    paddingVertical: Spacing.sm,
-  },
-  sheetActionText: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-  },
-  sheetRow: {
-    alignItems: 'center',
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.lg,
+    backgroundColor: '#0D0D0D',
+    borderRadius: 12,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
+    marginBottom: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  sheetRowTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-    fontWeight: Typography.fontWeightSemiBold,
-  },
-  sheetRowSubtitle: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeSm,
-    marginTop: 2,
-  },
+  playlistRowText: { flex: 1 },
+  playlistRowTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+  playlistRowSubtitle: { color: 'rgba(255,255,255,0.45)', fontSize: 13, marginTop: 2 },
   sheetEmptyText: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeMd,
-    paddingTop: Spacing.md,
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 15,
+    paddingTop: 16,
     textAlign: 'center',
   },
+
+  // ── Shared ──
+  cardPressed: { opacity: 0.85, transform: [{ scale: 0.97 }] },
 });

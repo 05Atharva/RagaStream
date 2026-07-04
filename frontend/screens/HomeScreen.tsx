@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
+  type DimensionValue,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,21 +13,27 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { FlashList } from '@shopify/flash-list';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { MotiView } from 'moti';
+import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { playTrack } from '../services/audioPlayer';
-import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
+import { ensureSongInCatalogue } from '../services/songService';
+import { recordPlayHistory } from '../services/historyService';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import type { Song } from '../hooks/useSongs';
 import { useAuthStore } from '../store/authStore';
 import { supabase } from '../services/supabase';
+import { useBottomPadding } from '../hooks/useBottomPadding';
+import { usePlayerStore, type Track } from '../store/playerStore';
 
 type Props = BottomTabScreenProps<BottomTabParamList, 'Home'>;
 
-type YouTubeSearchResult = {
-  youtube_id: string;
+type YouTubeStreamData = {
+  stream_url: string;
   title: string;
   channel: string;
   thumbnail: string;
@@ -43,12 +51,22 @@ const GENRE_CHIPS = [
   { label: 'Sufi', color: '#86EFAC' },
 ] as const;
 
-const FEATURED_QUERIES = [
-  'Kesariya Arijit Singh',
-  'Kun Faya Kun A.R. Rahman',
-  'Pasoori Ali Sethi',
-  'Madhubala Amit Trivedi',
+// PRD §7.1: "4 hardcoded youtube_ids shown as large banner cards"
+const FEATURED_IDS = [
+  'UmraLnDo_9g', // Tum Hi Ho - Arijit Singh
+  'T94PHkuydcw', // Kun Faya Kun - A.R. Rahman
+  '5Eqb_-j3FDA', // Pasoori - Ali Sethi
+  'Jqs9Q34Z_5Q', // Kesariya Lyric Video - Arijit Singh
 ];
+
+const FEATURED_BADGES = ['NEW RELEASE', 'TOP 50', 'FEATURED', 'TRENDING'];
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CONTENT_PADDING = 24;
+// 85% of content width — shows a sliver of the next card
+const FEATURED_CARD_WIDTH = (SCREEN_WIDTH - CONTENT_PADDING * 2) * 0.85;
+const FEATURED_CARD_HEIGHT = 190;
+const FEATURED_GAP = 12;
 
 function getGreeting(displayName?: string | null) {
   const hour = new Date().getHours();
@@ -64,9 +82,9 @@ function SectionHeader({ title }: { title: string }) {
 function SkeletonBlock({
   width,
   height,
-  borderRadius = BorderRadius.lg,
+  borderRadius = 16,
 }: {
-  width: number | string;
+  width: DimensionValue;
   height: number;
   borderRadius?: number;
 }) {
@@ -94,6 +112,7 @@ export default function HomeScreen({ navigation }: Props) {
       const { data } = await apiClient.get<Song[]>('/history');
       return data.slice(0, 10);
     },
+    retry: false,
   });
 
   const likedQuery = useQuery({
@@ -102,29 +121,46 @@ export default function HomeScreen({ navigation }: Props) {
       const { data } = await apiClient.get<Song[]>('/liked');
       return data.slice(0, 6);
     },
+    retry: false,
   });
+
+  // Fall back to songs catalogue if liked is empty OR errored
+  const shouldFallback =
+    (likedQuery.isSuccess && likedQuery.data.length === 0) || likedQuery.isError;
 
   const fallbackQuickPicksQuery = useQuery({
     queryKey: ['songs', 'quick-picks-fallback'],
-    enabled: likedQuery.isSuccess && likedQuery.data.length === 0,
+    enabled: shouldFallback,
     queryFn: async () => {
       const { data } = await apiClient.get<Song[]>('/songs', {
         params: { limit: 6 },
       });
       return data;
     },
+    retry: false,
   });
 
-  const featuredQueries = useQueries({
-    queries: FEATURED_QUERIES.map((q) => ({
-      queryKey: ['featured', q],
-      queryFn: async () => {
-        const { data } = await apiClient.get<YouTubeSearchResult[]>('/youtube/search', {
-          params: { q, limit: 1 },
-        });
-        return data[0] ?? null;
-      },
-    })),
+  // PRD §7.1: Featured Today — fetch stream data for hardcoded youtube_ids
+  // Individual IDs may fail (region-blocked/removed) — we skip failures silently.
+  const featuredQuery = useQuery({
+    queryKey: ['featured-today'],
+    queryFn: async () => {
+      const results = await Promise.allSettled(
+        FEATURED_IDS.map(async (ytId) => {
+          const { data } = await apiClient.get<YouTubeStreamData>('/youtube/stream', {
+            params: { id: ytId },
+          });
+          return { ...data, youtube_id: ytId };
+        })
+      );
+      // Only keep successful results
+      return results
+        .filter((r): r is PromiseFulfilledResult<YouTubeStreamData & { youtube_id: string }> =>
+          r.status === 'fulfilled'
+        )
+        .map((r) => r.value);
+    },
+    retry: false,
   });
 
   const quickPicks = useMemo(() => {
@@ -134,46 +170,120 @@ export default function HomeScreen({ navigation }: Props) {
     return fallbackQuickPicksQuery.data ?? [];
   }, [fallbackQuickPicksQuery.data, likedQuery.data]);
 
-  const featuredCards = featuredQueries
-    .map((query) => query.data)
-    .filter((item): item is YouTubeSearchResult => Boolean(item));
+  type FeaturedCard = YouTubeStreamData & { youtube_id: string };
+  const featuredCards = featuredQuery.data ?? [];
 
   const isQuickPicksLoading =
-    likedQuery.isLoading || (likedQuery.isSuccess && likedQuery.data.length === 0 && fallbackQuickPicksQuery.isLoading);
+    likedQuery.isLoading || (shouldFallback && fallbackQuickPicksQuery.isLoading);
 
   const isHistoryLoading = historyQuery.isLoading;
-  const isFeaturedLoading = featuredQueries.some((query) => query.isLoading);
+  const isFeaturedLoading = featuredQuery.isLoading;
   const avatarLetter = displayName.charAt(0).toUpperCase();
 
-  const [featuredLoading, setFeaturedLoading] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  // UI-only state: which genre chip is highlighted
+  const [selectedGenre, setSelectedGenre] = useState<string>('All');
 
-  const handlePlayFeatured = async (item: YouTubeSearchResult) => {
-    if (featuredLoading) return;
-    setFeaturedLoading(item.youtube_id);
+  // Generic helper to play a YouTube track and record history
+  const playYouTubeTrack = async (
+    youtubeId: string,
+    title: string,
+    channel: string,
+    thumbnail: string,
+    streamUrl: string,
+    album: string,
+  ) => {
+    const catalogueId = await ensureSongInCatalogue({
+      youtube_id: youtubeId,
+      title,
+      channel_name: channel,
+      thumbnail_url: thumbnail,
+      duration_sec: 0,
+    }).catch(() => youtubeId);
+
+    const track: Track = {
+      id: catalogueId,
+      title,
+      artist: channel,
+      album,
+      artwork: thumbnail,
+      url: streamUrl,
+      source: 'youtube',
+      youtubeId,
+      channelName: channel,
+      thumbnailUrl: thumbnail,
+    };
+    await playTrack(track);
+    usePlayerStore.setState({ currentTrack: track, queue: [track], isPlaying: true });
+    void recordPlayHistory(catalogueId);
+    return track;
+  };
+
+  const handlePlayFeatured = async (item: FeaturedCard) => {
+    if (loadingId) return;
+    setLoadingId(item.youtube_id);
     try {
-      const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
-        params: { id: item.youtube_id },
-      });
-      const track = {
-        id: item.youtube_id,
-        title: item.title,
-        artist: item.channel,
-        album: 'Featured',
-        artwork: item.thumbnail,
-        url: data.stream_url,
-        source: 'youtube' as const,
-        youtubeId: item.youtube_id,
-        channelName: item.channel,
-        thumbnailUrl: item.thumbnail,
-      };
-      await playTrack(track);
-      const { usePlayerStore: store } = await import('../store/playerStore');
-      store.setState({ currentTrack: track, queue: [track], isPlaying: true });
-      navigation.navigate('NowPlaying');
+      await playYouTubeTrack(
+        item.youtube_id,
+        item.title,
+        item.channel,
+        item.thumbnail,
+        item.stream_url,
+        'Featured',
+      );
+      navigation.navigate('NowPlaying' as never);
     } catch {
-      /* ignore — stream unavailable */
+      Toast.show({ type: 'error', text1: 'Could not play this track' });
     } finally {
-      setFeaturedLoading(null);
+      setLoadingId(null);
+    }
+  };
+
+  // B5 Fix: Quick Picks cards are now tappable
+  const handlePlayQuickPick = async (song: Song) => {
+    if (loadingId) return;
+    setLoadingId(song.id);
+    try {
+      const { data } = await apiClient.get<YouTubeStreamData>('/youtube/stream', {
+        params: { id: song.youtube_id },
+      });
+      await playYouTubeTrack(
+        song.youtube_id,
+        song.title,
+        song.channel_name || 'Unknown',
+        song.thumbnail_url || '',
+        data.stream_url,
+        'Quick Picks',
+      );
+      navigation.navigate('NowPlaying' as never);
+    } catch {
+      Toast.show({ type: 'error', text1: 'Could not play this track' });
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  // B6 Fix: Recently Played cards are now tappable
+  const handlePlayHistory = async (song: Song) => {
+    if (loadingId) return;
+    setLoadingId(song.id);
+    try {
+      const { data } = await apiClient.get<YouTubeStreamData>('/youtube/stream', {
+        params: { id: song.youtube_id },
+      });
+      await playYouTubeTrack(
+        song.youtube_id,
+        song.title,
+        song.channel_name || 'Unknown',
+        song.thumbnail_url || '',
+        data.stream_url,
+        'Recently Played',
+      );
+      navigation.navigate('NowPlaying' as never);
+    } catch {
+      Toast.show({ type: 'error', text1: 'Could not play this track' });
+    } finally {
+      setLoadingId(null);
     }
   };
 
@@ -198,33 +308,146 @@ export default function HomeScreen({ navigation }: Props) {
     );
   };
 
+  const bottomPadding = useBottomPadding();
+
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: bottomPadding }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── Header ── */}
         <View style={styles.header}>
-          <View style={styles.headerCopy}>
-            <Text style={styles.brandName}>RagaStream</Text>
-            <Text style={styles.greeting}>{getGreeting(displayName)}</Text>
-            <Text style={styles.headerSubtitle}>Your stream starts where you left it.</Text>
-          </View>
-          <Pressable
-            onPress={handleLogout}
-            style={styles.avatar}
-            hitSlop={10}
-          >
+          <Text style={styles.greeting}>{getGreeting(displayName)}</Text>
+          <Pressable onPress={handleLogout} style={styles.avatar} hitSlop={10}>
             <Text style={styles.avatarText}>{avatarLetter}</Text>
           </Pressable>
         </View>
 
+        {/* ── Genre filter chips (no section header) ── */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipsRow}
+          style={styles.chipsScroll}
+        >
+          <Pressable
+            style={[styles.chip, selectedGenre === 'All' && styles.chipActive]}
+            onPress={() => setSelectedGenre('All')}
+          >
+            <Text style={[styles.chipText, selectedGenre === 'All' && styles.chipTextActive]}>
+              All
+            </Text>
+          </Pressable>
+          {GENRE_CHIPS.map((chip) => (
+            <Pressable
+              key={chip.label}
+              style={[styles.chip, selectedGenre === chip.label && styles.chipActive]}
+              onPress={() => {
+                setSelectedGenre(chip.label);
+                navigation.navigate('Search', {
+                  initialQuery: chip.label,
+                  autoSearch: true,
+                });
+              }}
+            >
+              <Text
+                style={[
+                  styles.chipText,
+                  selectedGenre === chip.label && styles.chipTextActive,
+                ]}
+              >
+                {chip.label}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        {/* ── Featured Today — horizontal snap carousel ── */}
+        <View style={styles.section}>
+          <SectionHeader title="Featured Today" />
+          {isFeaturedLoading ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} scrollEnabled={false}>
+              <View style={styles.featuredSkeletonRow}>
+                {[0, 1].map((i) => (
+                  <SkeletonBlock
+                    key={i}
+                    width={FEATURED_CARD_WIDTH}
+                    height={FEATURED_CARD_HEIGHT}
+                    borderRadius={16}
+                  />
+                ))}
+              </View>
+            </ScrollView>
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              snapToInterval={FEATURED_CARD_WIDTH + FEATURED_GAP}
+              snapToAlignment="start"
+              decelerationRate="fast"
+              contentContainerStyle={styles.featuredScroll}
+            >
+              {featuredCards.map((item, index) => (
+                <Pressable
+                  key={item.youtube_id}
+                  style={({ pressed }) => [
+                    styles.featuredCard,
+                    pressed && styles.cardPressed,
+                  ]}
+                  onPress={() => void handlePlayFeatured(item)}
+                >
+                  <Image
+                    source={item.thumbnail ? { uri: item.thumbnail } : undefined}
+                    style={StyleSheet.absoluteFillObject}
+                    contentFit="cover"
+                  />
+                  <LinearGradient
+                    colors={['transparent', 'rgba(0,0,0,0.45)', 'rgba(0,0,0,0.92)']}
+                    locations={[0, 0.45, 1]}
+                    style={StyleSheet.absoluteFillObject}
+                  />
+                  <View style={styles.featuredContent}>
+                    <View style={styles.featuredTextGroup}>
+                      <Text style={[
+                        styles.featuredBadge,
+                        index % 2 === 1 && styles.featuredBadgeGold,
+                      ]}>
+                        {FEATURED_BADGES[index] ?? 'FEATURED'}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.featuredTitle}>
+                        {item.title}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.featuredArtist}>
+                        {item.channel}
+                      </Text>
+                    </View>
+                    <View style={styles.featuredPlayBtn}>
+                      {loadingId === item.youtube_id ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Ionicons name="play" size={18} color="#FFFFFF" />
+                      )}
+                    </View>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
+        {/* ── Quick Picks — 2-col bento grid, horizontal row cards ── */}
         <View style={styles.section}>
           <SectionHeader title="Quick Picks" />
           {isQuickPicksLoading ? (
-            <View style={styles.quickPicksSkeletonGrid}>
-              {Array.from({ length: 6 }).map((_, index) => (
-                <View key={index} style={styles.quickPickCard}>
-                  <SkeletonBlock width="100%" height={110} />
-                  <SkeletonBlock width="78%" height={14} borderRadius={6} />
-                  <SkeletonBlock width="56%" height={12} borderRadius={6} />
+            <View style={styles.bentoGrid}>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <View key={i} style={styles.bentoCardSkeleton}>
+                  <SkeletonBlock width={48} height={48} borderRadius={8} />
+                  <View style={styles.skeletonTextGroup}>
+                    <SkeletonBlock width="80%" height={13} borderRadius={4} />
+                    <SkeletonBlock width="56%" height={11} borderRadius={4} />
+                  </View>
                 </View>
               ))}
             </View>
@@ -233,36 +456,49 @@ export default function HomeScreen({ navigation }: Props) {
               data={quickPicks}
               keyExtractor={(item) => item.id}
               numColumns={2}
-              estimatedItemSize={220}
               scrollEnabled={false}
               renderItem={({ item }) => (
-                <View style={styles.quickPickCard}>
+                <Pressable
+                  style={({ pressed }) => [styles.bentoCard, pressed && styles.cardPressed]}
+                  onPress={() => void handlePlayQuickPick(item)}
+                >
                   <Image
                     source={item.thumbnail_url ? { uri: item.thumbnail_url } : undefined}
-                    style={styles.quickPickThumb}
+                    style={styles.bentoThumb}
                     contentFit="cover"
                   />
-                  <Text numberOfLines={1} style={styles.cardTitle}>
-                    {item.title}
-                  </Text>
-                  <Text numberOfLines={1} style={styles.cardSubtitle}>
-                    {item.channel_name || 'Unknown channel'}
-                  </Text>
-                </View>
+                  {loadingId === item.id ? (
+                    <ActivityIndicator
+                      color="#7C3AED"
+                      size="small"
+                      style={StyleSheet.absoluteFillObject}
+                    />
+                  ) : null}
+                  <View style={styles.bentoTextGroup}>
+                    <Text numberOfLines={1} style={styles.bentoTitle}>
+                      {item.title}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.bentoSubtitle}>
+                      {item.channel_name || 'Unknown'}
+                    </Text>
+                  </View>
+                </Pressable>
               )}
             />
           )}
         </View>
 
+        {/* ── Recently Played — horizontal scroll, 112px cards ── */}
         <View style={styles.section}>
           <SectionHeader title="Recently Played" />
           {isHistoryLoading ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={styles.rowGap}>
-                {Array.from({ length: 4 }).map((_, index) => (
-                  <View key={index} style={styles.historyCard}>
-                    <SkeletonBlock width={80} height={80} />
-                    <SkeletonBlock width={72} height={12} borderRadius={6} />
+              <View style={styles.historySkeletonRow}>
+                {[0, 1, 2, 3].map((i) => (
+                  <View key={i} style={styles.historyCardSkeleton}>
+                    <SkeletonBlock width={112} height={112} borderRadius={16} />
+                    <SkeletonBlock width={90} height={13} borderRadius={4} />
+                    <SkeletonBlock width={70} height={11} borderRadius={4} />
                   </View>
                 ))}
               </View>
@@ -272,84 +508,36 @@ export default function HomeScreen({ navigation }: Props) {
               horizontal
               data={historyQuery.data ?? []}
               keyExtractor={(item) => item.id}
-              estimatedItemSize={110}
               showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.historyScroll}
               renderItem={({ item }) => (
-                <View style={styles.historyCard}>
-                  <Image
-                    source={item.thumbnail_url ? { uri: item.thumbnail_url } : undefined}
-                    style={styles.historyThumb}
-                    contentFit="cover"
-                  />
-                  <Text numberOfLines={2} style={styles.historyTitle}>
-                    {item.title}
-                  </Text>
-                </View>
-              )}
-            />
-          )}
-        </View>
-
-        <View style={styles.section}>
-          <SectionHeader title="Genre Shortcuts" />
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-            {GENRE_CHIPS.map((chip) => (
-              <Pressable
-                key={chip.label}
-                onPress={() =>
-                  navigation.navigate('Search', {
-                    initialQuery: chip.label,
-                    autoSearch: true,
-                  })
-                }
-                style={[styles.genreChip, { backgroundColor: chip.color }]}
-              >
-                <Text style={styles.genreChipText}>{chip.label}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        </View>
-
-        <View style={styles.section}>
-          <SectionHeader title="Featured Today" />
-          {isFeaturedLoading ? (
-            <View style={styles.featuredList}>
-              {Array.from({ length: 4 }).map((_, index) => (
-                <View key={index} style={styles.featuredCard}>
-                  <SkeletonBlock width="100%" height={160} />
-                  <SkeletonBlock width="72%" height={16} borderRadius={6} />
-                  <SkeletonBlock width="48%" height={12} borderRadius={6} />
-                </View>
-              ))}
-            </View>
-          ) : (
-            <View style={styles.featuredList}>
-              {featuredCards.map((item) => (
                 <Pressable
-                  key={item.youtube_id}
-                  style={styles.featuredCard}
-                  onPress={() => void handlePlayFeatured(item)}
+                  style={({ pressed }) => [styles.historyCard, pressed && styles.cardPressed]}
+                  onPress={() => void handlePlayHistory(item)}
                 >
-                  <Image
-                    source={item.thumbnail ? { uri: item.thumbnail } : undefined}
-                    style={styles.featuredThumb}
-                    contentFit="cover"
-                  />
-                  {featuredLoading === item.youtube_id ? (
-                    <ActivityIndicator
-                      color={Colors.primary}
-                      style={StyleSheet.absoluteFillObject}
+                  <View style={styles.historyThumbWrapper}>
+                    <Image
+                      source={item.thumbnail_url ? { uri: item.thumbnail_url } : undefined}
+                      style={styles.historyThumb}
+                      contentFit="cover"
                     />
-                  ) : null}
-                  <Text numberOfLines={2} style={styles.featuredTitle}>
+                    {loadingId === item.id ? (
+                      <ActivityIndicator
+                        color="#7C3AED"
+                        size="small"
+                        style={[StyleSheet.absoluteFillObject, styles.historyLoader]}
+                      />
+                    ) : null}
+                  </View>
+                  <Text numberOfLines={1} style={styles.historyTitle}>
                     {item.title}
                   </Text>
-                  <Text numberOfLines={1} style={styles.featuredSubtitle}>
-                    {item.channel}
+                  <Text numberOfLines={1} style={styles.historySubtitle}>
+                    {item.channel_name || ''}
                   </Text>
                 </Pressable>
-              ))}
-            </View>
+              )}
+            />
           )}
         </View>
       </ScrollView>
@@ -359,152 +547,236 @@ export default function HomeScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: Colors.background,
+    backgroundColor: '#000000',
     flex: 1,
   },
   content: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: 140,
+    paddingHorizontal: CONTENT_PADDING,
+    paddingTop: 12,
+    // paddingBottom set dynamically via useBottomPadding
   },
+
+  // ── Header ──
   header: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: Spacing.xl,
-  },
-  headerCopy: {
-    flex: 1,
-    paddingRight: Spacing.md,
+    marginBottom: 20,
   },
   greeting: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeXl,
-    fontWeight: Typography.fontWeightBold,
-  },
-  brandName: {
-    color: Colors.primary,
-    fontSize: Typography.fontSizeSm,
-    fontWeight: Typography.fontWeightBold,
-    letterSpacing: 1.5,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-  },
-  headerSubtitle: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeSm,
-    marginTop: 6,
+    color: '#7C3AED',
+    fontSize: 24,
+    fontWeight: '700',
+    flex: 1,
+    paddingRight: 12,
   },
   avatar: {
     alignItems: 'center',
-    backgroundColor: '#2A2238',
-    borderRadius: BorderRadius.full,
-    height: 44,
+    backgroundColor: '#2A1F4A',
+    borderRadius: 999,
+    height: 40,
     justifyContent: 'center',
-    width: 44,
+    width: 40,
   },
   avatarText: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-    fontWeight: Typography.fontWeightBold,
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
+
+  // ── Genre chips ──
+  chipsScroll: {
+    marginBottom: 24,
+    marginHorizontal: -CONTENT_PADDING,
+  },
+  chipsRow: {
+    paddingHorizontal: CONTENT_PADDING,
+    gap: 8,
+  },
+  chip: {
+    backgroundColor: '#333535',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  chipActive: {
+    backgroundColor: '#F5A623',
+  },
+  chipText: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  chipTextActive: {
+    color: '#1a1000',
+  },
+
+  // ── Sections ──
   section: {
-    marginBottom: Spacing.xl,
+    marginBottom: 32,
   },
   sectionTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeLg,
-    fontWeight: Typography.fontWeightBold,
-    marginBottom: Spacing.md,
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 16,
   },
-  quickPicksSkeletonGrid: {
+
+  // ── Featured Today ──
+  featuredSkeletonRow: {
+    flexDirection: 'row',
+    gap: FEATURED_GAP,
+  },
+  featuredScroll: {
+    gap: FEATURED_GAP,
+    paddingRight: CONTENT_PADDING,
+  },
+  featuredCard: {
+    backgroundColor: '#121414',
+    borderRadius: 16,
+    height: FEATURED_CARD_HEIGHT,
+    overflow: 'hidden',
+    width: FEATURED_CARD_WIDTH,
+  },
+  featuredContent: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    padding: 16,
+  },
+  featuredTextGroup: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  featuredBadge: {
+    color: '#7C3AED',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  featuredBadgeGold: {
+    color: '#F5A623',
+  },
+  featuredTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  featuredArtist: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 13,
+    marginTop: 3,
+  },
+  featuredPlayBtn: {
+    alignItems: 'center',
+    backgroundColor: '#7C3AED',
+    borderRadius: 999,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+    flexShrink: 0,
+  },
+
+  // ── Quick Picks bento ──
+  bentoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
   },
-  quickPickCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.xl,
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
-    overflow: 'hidden',
-    padding: Spacing.sm,
-    width: '48.2%',
-  },
-  quickPickThumb: {
-    borderRadius: BorderRadius.lg,
-    height: 110,
-    width: '100%',
-  },
-  cardTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeSm,
-    fontWeight: Typography.fontWeightSemiBold,
-  },
-  cardSubtitle: {
-    color: Colors.muted,
-    fontSize: 12,
-  },
-  rowGap: {
+  bentoCardSkeleton: {
+    alignItems: 'center',
+    backgroundColor: '#121414',
+    borderRadius: 16,
     flexDirection: 'row',
-    gap: Spacing.md,
+    gap: 12,
+    marginBottom: 12,
+    padding: 12,
+    width: '48%',
+  },
+  skeletonTextGroup: {
+    flex: 1,
+    gap: 6,
+  },
+  bentoCard: {
+    alignItems: 'center',
+    backgroundColor: '#121414',
+    borderRadius: 16,
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+    padding: 12,
+    width: '48%',
+  },
+  bentoThumb: {
+    borderRadius: 8,
+    height: 48,
+    width: 48,
+    flexShrink: 0,
+  },
+  bentoTextGroup: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bentoTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  bentoSubtitle: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  // ── Recently Played ──
+  historyScroll: {
+    gap: 16,
+  },
+  historySkeletonRow: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  historyCardSkeleton: {
+    gap: 6,
+    width: 112,
   },
   historyCard: {
-    marginRight: Spacing.md,
-    width: 90,
+    width: 112,
+  },
+  historyThumbWrapper: {
+    borderRadius: 16,
+    height: 112,
+    marginBottom: 8,
+    overflow: 'hidden',
+    width: 112,
   },
   historyThumb: {
-    borderRadius: BorderRadius.lg,
-    height: 80,
-    marginBottom: Spacing.sm,
-    width: 80,
+    height: 112,
+    width: 112,
+  },
+  historyLoader: {
+    backgroundColor: 'rgba(0,0,0,0.4)',
   },
   historyTitle: {
-    color: Colors.onBackground,
-    fontSize: 12,
-    lineHeight: 16,
-    width: 80,
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '500',
   },
-  chipsRow: {
-    gap: Spacing.sm,
-    paddingRight: Spacing.lg,
+  historySubtitle: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 11,
+    marginTop: 2,
   },
-  genreChip: {
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-  },
-  genreChipText: {
-    color: '#111111',
-    fontSize: Typography.fontSizeSm,
-    fontWeight: Typography.fontWeightBold,
-  },
-  featuredList: {
-    gap: Spacing.md,
-  },
-  featuredCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.xl,
-    overflow: 'hidden',
-    padding: Spacing.sm,
-  },
-  featuredThumb: {
-    borderRadius: BorderRadius.lg,
-    height: 160,
-    marginBottom: Spacing.md,
-    width: '100%',
-  },
-  featuredTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-    fontWeight: Typography.fontWeightBold,
-  },
-  featuredSubtitle: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeSm,
-    marginTop: 4,
-  },
+
+  // ── Shared ──
   skeleton: {
-    backgroundColor: '#3A3A3A',
+    backgroundColor: '#1E1E1E',
+  },
+  cardPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.97 }],
   },
 });

@@ -16,6 +16,7 @@ import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
 import { usePlayerStore, type Track } from '../store/playerStore';
+import { recordPlayHistory } from '../services/historyService';
 
 type SongRecord = {
   id: string;
@@ -87,6 +88,9 @@ export default function LikedSongsScreen() {
         queue: reordered,
         isPlaying: true,
       });
+
+      // M1: Record play history for the first track
+      void recordPlayHistory(reordered[0].id);
     } catch {
       Toast.show({ type: 'error', text1: 'Could not start playback' });
     }
