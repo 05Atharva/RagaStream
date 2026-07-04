@@ -12,12 +12,38 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
+import Svg, { Path } from 'react-native-svg';
 import { supabase } from '../services/supabase';
+import Logo from '../components/Logo';
+import AuthDivider from '../components/AuthDivider';
+import GoogleButton from '../components/GoogleButton';
 
 type SignupScreenProps = {
   onSwitchToLogin: () => void;
 };
+
+// ---------------------------------------------------------------------------
+// Google Sign-In: try to load the native module — in Expo Go it won't exist.
+// ---------------------------------------------------------------------------
+let GoogleSignin: typeof import('@react-native-google-signin/google-signin').GoogleSignin | null = null;
+let statusCodes: typeof import('@react-native-google-signin/google-signin').statusCodes | null = null;
+
+try {
+  const gsi = require('@react-native-google-signin/google-signin');
+  GoogleSignin = gsi.GoogleSignin;
+  statusCodes = gsi.statusCodes;
+} catch {
+  // Native module unavailable (Expo Go) — Google sign-in button shows an Alert.
+}
+
+// Arrow icon for the CTA button
+function ArrowIcon() {
+  return (
+    <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+      <Path d="M5 12h14M12 5l7 7-7 7" stroke="#FFFFFF" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
 
 export default function SignupScreen({ onSwitchToLogin }: SignupScreenProps) {
   const [name, setName] = useState('');
@@ -64,28 +90,92 @@ export default function SignupScreen({ onSwitchToLogin }: SignupScreenProps) {
     Alert.alert('Account created', 'Your account is ready. You can continue into the app.');
   };
 
+  const handleGoogleSignup = async () => {
+    if (!GoogleSignin || !statusCodes) {
+      Alert.alert(
+        'Native build required',
+        'Google Sign-In requires a native build (EAS). Run: npx expo run:android'
+      );
+      return;
+    }
+
+    if (!supabase) {
+      Alert.alert('Auth unavailable', 'Supabase environment variables are missing.');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+
+      const idToken = userInfo.data?.idToken;
+      if (!idToken) {
+        Alert.alert('Google sign up failed', 'No ID token received from Google.');
+        setIsLoading(false);
+        return;
+      }
+
+      // signInWithIdToken creates the account if it doesn't exist
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: 'google',
+        token: idToken,
+      });
+
+      if (error) {
+        Alert.alert('Google sign up failed', error.message);
+      }
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (code === statusCodes.SIGN_IN_CANCELLED) {
+        // User cancelled — do nothing
+      } else if (code === statusCodes.IN_PROGRESS) {
+        // Already in progress
+      } else if (code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        Alert.alert('Error', 'Google Play Services not available on this device.');
+      } else {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        Alert.alert('Google sign up failed', message);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
-        style={styles.keyboardAvoider}
+        style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-          <View style={styles.hero}>
-            <Text style={styles.brand}>RagaStream</Text>
-            <Text style={styles.title}>Create your listening room</Text>
-            <Text style={styles.subtitle}>
-              Build a profile for playlists, uploads, and seamless archive discovery.
-            </Text>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Logo — circle container on signup */}
+          <View style={styles.logoSection}>
+            <View style={styles.logoCircle}>
+              <Logo size={56} />
+            </View>
+            <Text style={styles.heading}>Create Account</Text>
           </View>
 
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Signup</Text>
+          {/* Form */}
+          <View style={styles.form}>
+            <GoogleButton
+              label="Sign up with Google"
+              onPress={handleGoogleSignup}
+              disabled={isLoading}
+            />
+
+            <AuthDivider label="or" />
 
             <TextInput
               autoCapitalize="words"
               placeholder="Name"
-              placeholderTextColor={Colors.muted}
+              placeholderTextColor="rgba(255,255,255,0.45)"
               style={styles.input}
               value={name}
               onChangeText={setName}
@@ -96,7 +186,7 @@ export default function SignupScreen({ onSwitchToLogin }: SignupScreenProps) {
               autoComplete="email"
               keyboardType="email-address"
               placeholder="Email"
-              placeholderTextColor={Colors.muted}
+              placeholderTextColor="rgba(255,255,255,0.45)"
               style={styles.input}
               value={email}
               onChangeText={setEmail}
@@ -106,7 +196,7 @@ export default function SignupScreen({ onSwitchToLogin }: SignupScreenProps) {
               autoCapitalize="none"
               autoComplete="password"
               placeholder="Password"
-              placeholderTextColor={Colors.muted}
+              placeholderTextColor="rgba(255,255,255,0.45)"
               secureTextEntry
               style={styles.input}
               value={password}
@@ -117,27 +207,37 @@ export default function SignupScreen({ onSwitchToLogin }: SignupScreenProps) {
               autoCapitalize="none"
               autoComplete="password"
               placeholder="Confirm Password"
-              placeholderTextColor={Colors.muted}
+              placeholderTextColor="rgba(255,255,255,0.45)"
               secureTextEntry
               style={styles.input}
               value={confirmPassword}
               onChangeText={setConfirmPassword}
             />
 
-            <Pressable style={styles.primaryButton} onPress={handleSignup} disabled={isLoading}>
+            {/* Primary CTA */}
+            <Pressable
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+              onPress={handleSignup}
+              disabled={isLoading}
+            >
               {isLoading ? (
-                <ActivityIndicator color={Colors.onPrimary} />
+                <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.primaryButtonText}>Create Account</Text>
+                <View style={styles.primaryButtonInner}>
+                  <Text style={styles.primaryButtonText}>Create Account</Text>
+                  <ArrowIcon />
+                </View>
               )}
             </Pressable>
-
-            <Pressable onPress={onSwitchToLogin} disabled={isLoading}>
-              <Text style={styles.footerText}>
-                Already have an account? <Text style={styles.footerLink}>Sign in</Text>
-              </Text>
-            </Pressable>
           </View>
+
+          {/* Footer */}
+          <Pressable onPress={onSwitchToLogin} disabled={isLoading} style={styles.footer}>
+            <Text style={styles.footerText}>
+              {'Already have an account? '}
+              <Text style={styles.footerLink}>Log In</Text>
+            </Text>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -147,81 +247,84 @@ export default function SignupScreen({ onSwitchToLogin }: SignupScreenProps) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: '#000000',
   },
-  keyboardAvoider: {
+  flex: {
     flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingTop: 48,
+    paddingBottom: 32,
+    gap: 28,
+  },
+  logoSection: {
+    alignItems: 'center',
+    gap: 20,
+  },
+  logoCircle: {
+    alignItems: 'center',
     justifyContent: 'center',
-    padding: Spacing.lg,
-    gap: Spacing.xl,
-  },
-  hero: {
-    gap: Spacing.sm,
-  },
-  brand: {
-    color: Colors.primaryLight,
-    fontSize: Typography.fontSizeSm,
-    fontWeight: Typography.fontWeightSemiBold,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeXxl,
-    fontWeight: Typography.fontWeightBold,
-  },
-  subtitle: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeMd,
-    lineHeight: 24,
-  },
-  card: {
-    backgroundColor: Colors.surface,
-    borderColor: Colors.border,
-    borderRadius: BorderRadius.xl,
+    backgroundColor: '#121414',
+    borderRadius: 999,
     borderWidth: 1,
-    gap: Spacing.md,
-    padding: Spacing.lg,
+    borderColor: 'rgba(255,255,255,0.1)',
+    width: 96,
+    height: 96,
   },
-  sectionTitle: {
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeXl,
-    fontWeight: Typography.fontWeightBold,
-    marginBottom: Spacing.xs,
+  heading: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  form: {
+    gap: 12,
   },
   input: {
-    backgroundColor: Colors.background,
-    borderColor: Colors.border,
-    borderRadius: BorderRadius.lg,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 16,
     borderWidth: 1,
-    color: Colors.onBackground,
-    fontSize: Typography.fontSizeMd,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 14,
+    borderColor: 'rgba(255,255,255,0.1)',
+    color: '#FFFFFF',
+    fontSize: 16,
+    height: 56,
+    paddingHorizontal: 16,
   },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.lg,
-    minHeight: 52,
+    backgroundColor: '#7C3AED',
+    borderRadius: 999,
+    height: 56,
     justifyContent: 'center',
-    marginTop: Spacing.sm,
+    marginTop: 4,
+  },
+  buttonPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.98 }],
+  },
+  primaryButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   primaryButtonText: {
-    color: Colors.onPrimary,
-    fontSize: Typography.fontSizeMd,
-    fontWeight: Typography.fontWeightBold,
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  footer: {
+    alignItems: 'center',
+    marginTop: 'auto',
+    paddingTop: 8,
   },
   footerText: {
-    color: Colors.muted,
-    fontSize: Typography.fontSizeSm,
-    textAlign: 'center',
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 14,
   },
   footerLink: {
-    color: Colors.onBackground,
-    fontWeight: Typography.fontWeightSemiBold,
+    color: '#7C3AED',
+    fontWeight: '600',
   },
 });
