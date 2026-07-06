@@ -69,24 +69,29 @@ export async function playTrack(track: Track): Promise<void> {
 
   await _stopCurrentSound();
 
-  const { sound } = await _Audio.Sound.createAsync(
-    { uri: track.url },
-    { shouldPlay: true, progressUpdateIntervalMillis: 1000 },
-    (status) => {
-      if (status.isLoaded) {
-        _isPlaying = status.isPlaying;
-        if (_onPlaybackStatusUpdate) {
-          _onPlaybackStatusUpdate(
-            status.isPlaying,
-            (status.positionMillis ?? 0) / 1000,
-            (status.durationMillis ?? 0) / 1000
-          );
+  try {
+    const { sound } = await _Audio.Sound.createAsync(
+      { uri: track.url },
+      { shouldPlay: true, progressUpdateIntervalMillis: 1000 },
+      (status) => {
+        if (status.isLoaded) {
+          _isPlaying = status.isPlaying;
+          if (_onPlaybackStatusUpdate) {
+            _onPlaybackStatusUpdate(
+              status.isPlaying,
+              (status.positionMillis ?? 0) / 1000,
+              (status.durationMillis ?? 0) / 1000
+            );
+          }
         }
       }
-    }
-  );
-  _currentSound = sound;
-  _isPlaying = true;
+    );
+    _currentSound = sound;
+    _isPlaying = true;
+  } catch (err) {
+    console.error('[audioPlayer] Failed to create sound:', err, 'URL:', track.url?.substring(0, 80));
+    throw err;
+  }
 }
 
 /** Pause current playback. */
