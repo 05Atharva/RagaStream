@@ -22,7 +22,10 @@ load_dotenv()
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
-# Supabase project URL and anon/service key for the apikey header
+# Supabase project URL and anon key for the Auth API 'apikey' header.
+# Note: The Auth API requires the *anon* key (SUPABASE_KEY), NOT the
+# service_role key.  The service_role key is used only in db.py for
+# PostgREST queries that need to bypass RLS.
 _SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 _SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
