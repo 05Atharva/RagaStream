@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Linking from 'expo-linking';
 import Svg, { Path } from 'react-native-svg';
 import { supabase } from '../services/supabase';
-import { createDemoSession, DEMO_EMAIL, DEMO_PASSWORD, useAuthStore } from '../store/authStore';
+import { useAuthStore } from '../store/authStore';
 import Logo from '../components/Logo';
 import AuthDivider from '../components/AuthDivider';
 import GoogleButton from '../components/GoogleButton';
@@ -85,13 +85,8 @@ export default function LoginScreen({ onSwitchToSignup }: LoginScreenProps) {
   const redirectTo = useMemo(() => Linking.createURL('auth/callback'), []);
 
   const handleLogin = async () => {
-    if (email.trim().toLowerCase() === DEMO_EMAIL && password === DEMO_PASSWORD) {
-      setSession(createDemoSession());
-      return;
-    }
-
     if (!supabase) {
-      Alert.alert('Auth unavailable', `Use demo login: ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
+      Alert.alert('Auth unavailable', 'Supabase environment variables are missing.');
       return;
     }
 
@@ -209,11 +204,7 @@ export default function LoginScreen({ onSwitchToSignup }: LoginScreenProps) {
     Alert.alert('Check your inbox', 'Password reset instructions have been sent.');
   };
 
-  const handleDemoLogin = () => {
-    setEmail(DEMO_EMAIL);
-    setPassword(DEMO_PASSWORD);
-    setSession(createDemoSession());
-  };
+
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -303,10 +294,6 @@ export default function LoginScreen({ onSwitchToSignup }: LoginScreenProps) {
             <View style={styles.secondaryLinks}>
               <Pressable onPress={handleForgotPassword} disabled={isLoading}>
                 <Text style={styles.secondaryLink}>Forgot password?</Text>
-              </Pressable>
-              <Text style={styles.secondaryLinkSep}>·</Text>
-              <Pressable onPress={handleDemoLogin} disabled={isLoading}>
-                <Text style={styles.secondaryLink}>Use demo account</Text>
               </Pressable>
             </View>
           </View>
