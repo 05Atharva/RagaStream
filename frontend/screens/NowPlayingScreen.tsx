@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Dimensions,
   Linking,
   Pressable,
   StyleProp,
@@ -50,6 +49,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { apiClient } from '../services/apiClient';
+import { queryClient } from '../services/queryClient';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import { usePlayerStore, type RepeatModeValue, type Track } from '../store/playerStore';
 
@@ -252,20 +252,17 @@ export default function NowPlayingScreen() {
   };
 
   const panGesture = Gesture.Pan()
+    .activeOffsetY(15)
     .onUpdate((event) => {
       translateY.value = Math.max(0, event.translationY);
     })
     .onEnd(() => {
       if (translateY.value > DISMISS_THRESHOLD) {
-        translateY.value = withTiming(
-          Dimensions.get('window').height,
-          { duration: 180 },
-          (finished) => {
-            if (finished) {
-              runOnJS(dismiss)();
-            }
-          }
-        );
+        // Dismiss immediately — let the navigation modal animation handle
+        // the exit. Animating translateY to full screen height first caused
+        // crashes on Android because goBack() ran with an invalid layout.
+        translateY.value = withTiming(300, { duration: 150 });
+        runOnJS(dismiss)();
         return;
       }
       translateY.value = withSpring(0, {
@@ -327,6 +324,9 @@ export default function NowPlayingScreen() {
         await apiClient.post('/liked', { song_id: songId });
         setIsLiked(true);
       }
+
+      // Instantly refresh liked queries across all screens
+      void queryClient.invalidateQueries({ queryKey: ['liked'] });
     } catch {
       Toast.show({
         type: 'error',
