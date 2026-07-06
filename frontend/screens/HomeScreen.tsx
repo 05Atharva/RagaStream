@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { FlashList } from '@shopify/flash-list';
 import { useQuery } from '@tanstack/react-query';
+import { queryClient } from '../services/queryClient';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -53,10 +54,10 @@ const GENRE_CHIPS = [
 
 // PRD §7.1: "4 hardcoded youtube_ids shown as large banner cards"
 const FEATURED_IDS = [
-  'UmraLnDo_9g', // Tum Hi Ho - Arijit Singh
+  '81qmmlsIE3k', // Tum Hi Ho - Arijit Singh (Aashiqui 2)
   'T94PHkuydcw', // Kun Faya Kun - A.R. Rahman
-  '5Eqb_-j3FDA', // Pasoori - Ali Sethi
-  'Jqs9Q34Z_5Q', // Kesariya Lyric Video - Arijit Singh
+  '5Eqb_-j3FDA', // Pasoori - Ali Sethi x Shae Gill
+  'BddP6PYo2gs', // Kesariya - Brahmāstra - Arijit Singh
 ];
 
 const FEATURED_BADGES = ['NEW RELEASE', 'TOP 50', 'FEATURED', 'TRENDING'];
@@ -113,6 +114,7 @@ export default function HomeScreen({ navigation }: Props) {
       return data.slice(0, 10);
     },
     retry: false,
+    refetchOnMount: 'always',
   });
 
   const likedQuery = useQuery({
@@ -122,6 +124,7 @@ export default function HomeScreen({ navigation }: Props) {
       return data.slice(0, 6);
     },
     retry: false,
+    refetchOnMount: 'always',
   });
 
   // Fall back to songs catalogue if liked is empty OR errored
@@ -215,7 +218,10 @@ export default function HomeScreen({ navigation }: Props) {
     };
     await playTrack(track);
     usePlayerStore.setState({ currentTrack: track, queue: [track], isPlaying: true });
-    void recordPlayHistory(catalogueId);
+    void recordPlayHistory(catalogueId).then(() => {
+      // Refresh history across all screens after recording play
+      void queryClient.invalidateQueries({ queryKey: ['history'] });
+    });
     return track;
   };
 
@@ -232,7 +238,8 @@ export default function HomeScreen({ navigation }: Props) {
         'Featured',
       );
       navigation.navigate('NowPlaying' as never);
-    } catch {
+    } catch (err) {
+      console.error('[HomeScreen] handlePlayFeatured error:', err);
       Toast.show({ type: 'error', text1: 'Could not play this track' });
     } finally {
       setLoadingId(null);

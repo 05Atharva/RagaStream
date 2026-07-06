@@ -47,6 +47,7 @@ export default function LikedSongsScreen() {
       const { data } = await apiClient.get<SongRecord[]>('/liked');
       return data;
     },
+    refetchOnMount: 'always',
   });
 
   const likedSongs = likedQuery.data ?? [];
@@ -148,7 +149,6 @@ export default function LikedSongsScreen() {
         <FlashList
           data={likedSongs}
           keyExtractor={(item) => item.id}
-          estimatedItemSize={84}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => (
             <Pressable onPress={() => void handlePlayFromSong(item.id)} style={styles.songRow}>

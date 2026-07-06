@@ -22,6 +22,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { playTrack } from '../services/audioPlayer';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
+import { queryClient } from '../services/queryClient';
 import { ensureSongInCatalogue } from '../services/songService';
 import { recordPlayHistory } from '../services/historyService';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
@@ -163,7 +164,9 @@ export default function SearchScreen({ route, navigation }: Props) {
       };
       await playTrack(track);
       usePlayerStore.setState({ currentTrack: track, queue: [track], isPlaying: true });
-      void recordPlayHistory(songId);
+      void recordPlayHistory(songId).then(() => {
+        void queryClient.invalidateQueries({ queryKey: ['history'] });
+      });
       navigation.getParent()?.navigate('NowPlaying');
     } catch (err) {
       console.error('[SearchScreen] playback error:', err);
@@ -189,6 +192,7 @@ export default function SearchScreen({ route, navigation }: Props) {
         duration_sec: selectedResult.duration,
       });
       await apiClient.post('/liked', { song_id: songId });
+      void queryClient.invalidateQueries({ queryKey: ['liked'] });
       Toast.show({ type: 'success', text1: 'Added to liked songs' });
     } catch {
       Toast.show({ type: 'error', text1: 'Could not like song' });
