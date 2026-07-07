@@ -133,6 +133,24 @@ export default function SearchScreen({ route, navigation }: Props) {
     },
   });
 
+  const likedQuery = useQuery({
+    queryKey: ['liked'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<SongRecord[]>('/liked');
+      return data;
+    },
+  });
+
+  const selectedLikedSong = useMemo(() => {
+    if (!selectedResult) {
+      return undefined;
+    }
+
+    return likedQuery.data?.find((song) => song.youtube_id === selectedResult.youtube_id);
+  }, [likedQuery.data, selectedResult]);
+
+  const selectedIsLiked = Boolean(selectedLikedSong);
+
   const playlistSnapPoints = useMemo(() => ['50%', '75%'], []);
 
   const handlePlayResult = async (item: YouTubeSearchResult) => {
@@ -183,19 +201,51 @@ export default function SearchScreen({ route, navigation }: Props) {
 
   const handleLike = async () => {
     if (!selectedResult) return;
+
+    const wasLiked = selectedIsLiked;
+    const previousLikedSongs = queryClient.getQueryData<SongRecord[]>(['liked']);
+    const optimisticSong: SongRecord = selectedLikedSong ?? {
+      id: selectedResult.youtube_id,
+      youtube_id: selectedResult.youtube_id,
+      title: selectedResult.title,
+      channel_name: selectedResult.channel,
+      thumbnail_url: selectedResult.thumbnail,
+      duration_sec: selectedResult.duration,
+    };
+
+    queryClient.setQueryData<SongRecord[]>(['liked'], (current = []) => {
+      if (wasLiked) {
+        return current.filter((song) => song.youtube_id !== selectedResult.youtube_id);
+      }
+
+      if (current.some((song) => song.youtube_id === selectedResult.youtube_id)) {
+        return current;
+      }
+
+      return [optimisticSong, ...current];
+    });
+
     try {
-      const songId = await ensureSongInCatalogue({
+      const songId = selectedLikedSong?.id ?? await ensureSongInCatalogue({
         youtube_id: selectedResult.youtube_id,
         title: selectedResult.title,
         channel_name: selectedResult.channel,
         thumbnail_url: selectedResult.thumbnail,
         duration_sec: selectedResult.duration,
       });
-      await apiClient.post('/liked', { song_id: songId });
+
+      if (wasLiked) {
+        await apiClient.delete(`/liked/${songId}`);
+        Toast.show({ type: 'success', text1: 'Removed from liked songs' });
+      } else {
+        await apiClient.post('/liked', { song_id: songId });
+        Toast.show({ type: 'success', text1: 'Added to liked songs' });
+      }
+
       void queryClient.invalidateQueries({ queryKey: ['liked'] });
-      Toast.show({ type: 'success', text1: 'Added to liked songs' });
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not like song' });
+      queryClient.setQueryData(['liked'], previousLikedSongs);
+      Toast.show({ type: 'error', text1: 'Could not update liked songs' });
     }
   };
 
@@ -453,6 +503,7 @@ export default function SearchScreen({ route, navigation }: Props) {
         thumbnail={selectedResult?.thumbnail}
         title={selectedResult?.title ?? ''}
         channel={selectedResult?.channel ?? ''}
+        isLiked={selectedIsLiked}
         onLike={() => void handleLike()}
         onAddToPlaylist={() => void handleOpenPlaylistSheet()}
         onAddToQueue={() => void handleAddToQueue()}
