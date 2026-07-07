@@ -16,10 +16,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import SafeBlurView from '../components/SafeBlurView';
 import SongOptionsSheet from '../components/SongOptionsSheet';
+import LikeButton from '../components/LikeButton';
 import Slider from '@react-native-community/slider';
 import { BottomSheetFlatList, BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
 import { Image } from 'expo-image';
 import SleepTimer from '../components/SleepTimer';
+import EqualizerBars from '../components/EqualizerBars';
 import {
   Gesture,
   GestureDetector,
@@ -55,6 +57,11 @@ import { usePlayerStore, type RepeatModeValue, type Track } from '../store/playe
 
 const DISMISS_THRESHOLD = 120;
 const MIN_ART_PADDING = 48;
+const MORPH_DURATION_MS = 180;
+const PRESS_SPRING = {
+  damping: 15,
+  stiffness: 200,
+};
 
 type ProgressState = {
   position: number;
@@ -158,9 +165,21 @@ export default function NowPlayingScreen() {
   const [playlists, setPlaylists] = useState<PlaylistRecord[]>([]);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
   const [isUpdatingLike, setIsUpdatingLike] = useState(false);
+  const [sliderWidth, setSliderWidth] = useState(0);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [seekingPosition, setSeekingPosition] = useState(0);
   const translateY = useSharedValue(0);
-  const heartScale = useSharedValue(1);
+  const artRotation = useSharedValue(0);
+  const glowOpacity = useSharedValue(0.3);
+  const playPauseScale = useSharedValue(1);
+  const playPauseProgress = useSharedValue(isPlaying ? 1 : 0);
+  const seekThumbScale = useSharedValue(1);
+  const seekTooltipOpacity = useSharedValue(0);
+  const seekTooltipTranslateY = useSharedValue(8);
+  const seekGlowOpacity = useSharedValue(0.4);
   const playlistsSheetRef = useRef<BottomSheetModal>(null);
+  const wasPlayingRef = useRef(isPlaying);
+  const visualIsPlayingRef = useRef(isPlaying);
   const queueSheetRef = useRef<BottomSheetModal>(null);
   const sleepTimerRef = useRef<BottomSheetModal>(null);
   const songOptionsSheetRef = useRef<BottomSheetModal>(null);
@@ -275,9 +294,113 @@ export default function NowPlayingScreen() {
     transform: [{ translateY: translateY.value }],
   }));
 
-  const heartAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: heartScale.value }],
+
+  const playPauseButtonAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: playPauseScale.value }],
   }));
+
+  const playIconAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: 1 - playPauseProgress.value,
+    transform: [{ scale: 1 - playPauseProgress.value * 0.3 }],
+  }));
+
+  const pauseIconAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: playPauseProgress.value,
+    transform: [{ scale: 0.7 + playPauseProgress.value * 0.3 }],
+  }));
+
+  const artworkRotationStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${artRotation.value}deg` }],
+  }));
+
+  const artworkGlowStyle = useAnimatedStyle(() => ({
+    opacity: glowOpacity.value,
+  }));
+
+  const seekThumbStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: seekThumbScale.value }],
+  }));
+
+  const seekTooltipAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: seekTooltipOpacity.value,
+    transform: [{ translateY: seekTooltipTranslateY.value }],
+  }));
+
+  const seekGlowAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: seekGlowOpacity.value,
+  }));
+
+  useEffect(() => {
+    if (isPlaying) {
+      const normalizedRotation = ((artRotation.value % 360) + 360) % 360;
+      cancelAnimation(artRotation);
+      cancelAnimation(glowOpacity);
+      artRotation.value = normalizedRotation;
+      artRotation.value = withRepeat(
+        withTiming(normalizedRotation + 360, {
+          duration: 8000,
+          easing: Easing.linear,
+        }),
+        -1,
+        false
+      );
+      glowOpacity.value = withRepeat(
+        withSequence(
+          withTiming(0.7, {
+            duration: 1000,
+            easing: Easing.inOut(Easing.ease),
+          }),
+          withTiming(0.3, {
+            duration: 1000,
+            easing: Easing.inOut(Easing.ease),
+          })
+        ),
+        -1,
+        false
+      );
+      wasPlayingRef.current = true;
+      return;
+    }
+
+    cancelAnimation(artRotation);
+    if (wasPlayingRef.current) {
+      artRotation.value = withTiming(artRotation.value + 18, {
+        duration: 600,
+        easing: Easing.out(Easing.cubic),
+      });
+    }
+
+    cancelAnimation(glowOpacity);
+    glowOpacity.value = withTiming(0.3, {
+      duration: 600,
+      easing: Easing.out(Easing.cubic),
+    });
+    wasPlayingRef.current = false;
+  }, [artRotation, glowOpacity, isPlaying]);
+
+  useEffect(() => {
+    if (!currentTrack) {
+      cancelAnimation(seekGlowOpacity);
+      seekGlowOpacity.value = 0;
+      return;
+    }
+    seekGlowOpacity.value = withRepeat(
+      withSequence(
+        withTiming(0.8, { duration: 750, easing: Easing.inOut(Easing.ease) }),
+        withTiming(0.4, { duration: 750, easing: Easing.inOut(Easing.ease) })
+      ),
+      -1,
+      false
+    );
+  }, [currentTrack, seekGlowOpacity]);
+
+  useEffect(() => {
+    visualIsPlayingRef.current = isPlaying;
+    playPauseProgress.value = withTiming(isPlaying ? 1 : 0, {
+      duration: MORPH_DURATION_MS,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [isPlaying, playPauseProgress]);
 
   const ensureSongInCatalogue = useCallback(async () => {
     if (!currentTrack || !youtubeId) {
@@ -308,26 +431,23 @@ export default function NowPlayingScreen() {
       return;
     }
 
+    const wasLiked = isLiked;
     setIsUpdatingLike(true);
-    heartScale.value = withSequence(
-      withTiming(1.4, { duration: 100 }),
-      withTiming(1, { duration: 100 })
-    );
+    setIsLiked(!wasLiked);
 
     try {
       const songId = await ensureSongInCatalogue();
 
-      if (isLiked) {
+      if (wasLiked) {
         await apiClient.delete(`/liked/${songId}`);
-        setIsLiked(false);
       } else {
         await apiClient.post('/liked', { song_id: songId });
-        setIsLiked(true);
       }
 
       // Instantly refresh liked queries across all screens
       void queryClient.invalidateQueries({ queryKey: ['liked'] });
     } catch {
+      setIsLiked(wasLiked);
       Toast.show({
         type: 'error',
         text1: 'Could not update liked songs',
@@ -399,6 +519,23 @@ export default function NowPlayingScreen() {
     usePlayerStore.setState({ isPlaying: nowPlaying });
   };
 
+  const handlePlayPausePressIn = () => {
+    playPauseScale.value = withSpring(0.88, PRESS_SPRING);
+  };
+
+  const handlePlayPausePressOut = () => {
+    playPauseScale.value = withSpring(1, PRESS_SPRING);
+  };
+
+  const handlePlayPausePress = () => {
+    visualIsPlayingRef.current = !visualIsPlayingRef.current;
+    playPauseProgress.value = withTiming(visualIsPlayingRef.current ? 1 : 0, {
+      duration: MORPH_DURATION_MS,
+      easing: Easing.out(Easing.cubic),
+    });
+    void togglePlayback();
+  };
+
   const skipPrevious = async () => {
     try {
       await TrackPlayer.skipToPrevious();
@@ -415,7 +552,23 @@ export default function NowPlayingScreen() {
     }
   };
 
+  const handleSlidingStart = (value: number) => {
+    setIsSeeking(true);
+    setSeekingPosition(value);
+    seekThumbScale.value = withSpring(1.4, { damping: 10, stiffness: 300 });
+    seekTooltipOpacity.value = withTiming(1, { duration: 150 });
+    seekTooltipTranslateY.value = withTiming(0, { duration: 150 });
+  };
+
+  const handleValueChange = (value: number) => {
+    setSeekingPosition(value);
+  };
+
   const handleSeekComplete = async (value: number) => {
+    setIsSeeking(false);
+    seekThumbScale.value = withSpring(1.0, { damping: 10, stiffness: 300 });
+    seekTooltipOpacity.value = withTiming(0, { duration: 150 });
+    seekTooltipTranslateY.value = withTiming(8, { duration: 150 });
     await audioSeekTo(value);
     setProgress((prev) => ({ ...prev, position: value }));
     setPosition(value);
@@ -528,6 +681,12 @@ export default function NowPlayingScreen() {
     );
   }
 
+  const displayPosition = isSeeking ? seekingPosition : progress.position;
+  const thumbX = sliderWidth > 0
+    ? (displayPosition / Math.max(progress.duration, 1)) * sliderWidth
+    : 0;
+  const tooltipLeft = Math.max(0, Math.min(thumbX - 24, Math.max(0, sliderWidth - 48)));
+
   return (
     <>
       <GestureDetector gesture={panGesture}>
@@ -565,11 +724,14 @@ export default function NowPlayingScreen() {
             {/* Album art */}
             <View style={styles.artSection}>
               <View style={[styles.artworkWrapper, { width: albumSize, height: albumSize }]}>
-                <Image
-                  source={thumbnailSource ? { uri: thumbnailSource } : undefined}
-                  style={styles.artwork}
-                  contentFit="cover"
-                />
+                <Animated.View pointerEvents="none" style={[styles.artGlow, artworkGlowStyle]} />
+                <Animated.View style={[styles.artAnimatedWrapper, artworkRotationStyle]}>
+                  <Image
+                    source={thumbnailSource ? { uri: thumbnailSource } : undefined}
+                    style={styles.artwork}
+                    contentFit="cover"
+                  />
+                </Animated.View>
                 <View style={styles.youtubeBadge}>
                   <Ionicons name="logo-youtube" size={14} color="#FFFFFF" />
                 </View>
@@ -580,7 +742,14 @@ export default function NowPlayingScreen() {
             <View style={styles.playerControls}>
               {/* Track meta */}
               <View style={styles.metaSection}>
-                <MarqueeText text={currentTrack.title} style={styles.title} />
+                <View style={styles.titleRow}>
+                  <View style={styles.titleWrap}>
+                    <MarqueeText text={currentTrack.title} style={styles.title} />
+                  </View>
+                  <View style={styles.titleIndicator}>
+                    <EqualizerBars isPlaying={isPlaying} size="md" color="#F5A623" />
+                  </View>
+                </View>
                 <Pressable
                   onPress={() => {
                     if (channelName) {
@@ -596,15 +765,44 @@ export default function NowPlayingScreen() {
 
               {/* Seek bar */}
               <View style={styles.seekSection}>
-                <Slider
-                  value={progress.position}
-                  minimumValue={0}
-                  maximumValue={Math.max(progress.duration, 1)}
-                  minimumTrackTintColor="#7C3AED"
-                  maximumTrackTintColor="rgba(255,255,255,0.15)"
-                  thumbTintColor="#d2bbff"
-                  onSlidingComplete={(value) => void handleSeekComplete(value)}
-                />
+                <View
+                  onLayout={(e) => setSliderWidth(e.nativeEvent.layout.width)}
+                  style={styles.seekSliderWrapper}
+                >
+                  {/* Seek position tooltip */}
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[styles.seekTooltip, seekTooltipAnimatedStyle, { left: tooltipLeft }]}
+                  >
+                    <Text style={styles.seekTooltipText}>
+                      {formatTime(isSeeking ? seekingPosition : progress.position)}
+                    </Text>
+                  </Animated.View>
+
+                  {/* Custom animated thumb (native thumb is transparent) */}
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[styles.seekThumb, seekThumbStyle, { left: thumbX - 10 }]}
+                  />
+
+                  {/* Glow pulse at leading edge of filled track */}
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[styles.seekGlow, seekGlowAnimatedStyle, { left: Math.max(0, thumbX - 6) }]}
+                  />
+
+                  <Slider
+                    value={progress.position}
+                    minimumValue={0}
+                    maximumValue={Math.max(progress.duration, 1)}
+                    minimumTrackTintColor="#7C3AED"
+                    maximumTrackTintColor="rgba(255,255,255,0.15)"
+                    thumbTintColor="transparent"
+                    onSlidingStart={handleSlidingStart}
+                    onValueChange={handleValueChange}
+                    onSlidingComplete={(value) => void handleSeekComplete(value)}
+                  />
+                </View>
                 <View style={styles.timeRow}>
                   <Text style={styles.timeText}>{formatTime(progress.position)}</Text>
                   <Text style={styles.timeText}>{formatTime(progress.duration)}</Text>
@@ -617,19 +815,29 @@ export default function NowPlayingScreen() {
                   <Ionicons name="play-skip-back" size={28} color="rgba(255,255,255,0.85)" />
                 </Pressable>
 
-                <Pressable hitSlop={8} onPress={() => void togglePlayback()} style={styles.playPauseButton}>
-                  <LinearGradient
-                    colors={['#7C3AED', '#5B21B6']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={StyleSheet.absoluteFillObject}
-                  />
-                  <Ionicons
-                    name={isPlaying ? 'pause' : 'play'}
-                    size={32}
-                    color="#FFFFFF"
-                    style={!isPlaying ? styles.playIconOffset : undefined}
-                  />
+                <Pressable
+                  hitSlop={8}
+                  onPress={handlePlayPausePress}
+                  onPressIn={handlePlayPausePressIn}
+                  onPressOut={handlePlayPausePressOut}
+                  style={styles.playPauseButton}
+                >
+                  <Animated.View style={[styles.playPauseButtonInner, playPauseButtonAnimatedStyle]}>
+                    <LinearGradient
+                      colors={['#7C3AED', '#5B21B6']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={StyleSheet.absoluteFillObject}
+                    />
+                    <View style={styles.playPauseIconContainer}>
+                      <Animated.View style={[styles.playPauseIconLayer, playIconAnimatedStyle]}>
+                        <Ionicons name="play" size={32} color="#FFFFFF" style={styles.playIconOffset} />
+                      </Animated.View>
+                      <Animated.View style={[styles.playPauseIconLayer, pauseIconAnimatedStyle]}>
+                        <Ionicons name="pause" size={32} color="#FFFFFF" />
+                      </Animated.View>
+                    </View>
+                  </Animated.View>
                 </Pressable>
 
                 <Pressable hitSlop={8} onPress={() => void skipNext()} style={styles.transportButton}>
@@ -639,15 +847,7 @@ export default function NowPlayingScreen() {
 
               {/* Secondary actions glass panel */}
               <View style={styles.actionsPanel}>
-                <Animated.View style={heartAnimatedStyle}>
-                  <Pressable onPress={() => void handleToggleLike()} style={styles.actionButton}>
-                    <Ionicons
-                      name={isLiked ? 'heart' : 'heart-outline'}
-                      size={24}
-                      color={isLiked ? '#F5A623' : 'rgba(255,255,255,0.7)'}
-                    />
-                  </Pressable>
-                </Animated.View>
+                <LikeButton isLiked={isLiked} onToggle={() => void handleToggleLike()} size={24} />
                 <Pressable onPress={() => void handleOpenPlaylists()} style={styles.actionButton}>
                   <Ionicons name="add-circle-outline" size={24} color="rgba(255,255,255,0.7)" />
                 </Pressable>
@@ -736,6 +936,7 @@ export default function NowPlayingScreen() {
         thumbnail={thumbnailSource}
         title={currentTrack?.title ?? ''}
         channel={channelName}
+        isLiked={isLiked}
         onLike={() => void handleToggleLike()}
         onAddToPlaylist={() => void handleOpenPlaylists()}
         onShare={handleShareYouTube}
@@ -800,6 +1001,20 @@ const styles = StyleSheet.create({
   artworkWrapper: {
     position: 'relative',
   },
+  artGlow: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#7C3AED',
+    borderRadius: 24,
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.9,
+    shadowRadius: 28,
+    transform: [{ scale: 1.03 }],
+  },
+  artAnimatedWrapper: {
+    height: '100%',
+    width: '100%',
+  },
   artwork: {
     backgroundColor: '#121414',
     borderRadius: 16,
@@ -827,6 +1042,19 @@ const styles = StyleSheet.create({
   metaSection: {
     gap: 4,
   },
+  titleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  titleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  titleIndicator: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   marqueeMask: {
     overflow: 'hidden',
     width: '100%',
@@ -844,6 +1072,45 @@ const styles = StyleSheet.create({
   },
   seekSection: {
     gap: 4,
+  },
+  seekSliderWrapper: {
+    overflow: 'visible',
+    position: 'relative',
+  },
+  seekThumb: {
+    backgroundColor: '#d2bbff',
+    borderRadius: 10,
+    height: 20,
+    position: 'absolute',
+    top: 10,
+    width: 20,
+  },
+  seekTooltip: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(18,20,20,0.92)',
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minWidth: 48,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    position: 'absolute',
+    top: -36,
+  },
+  seekTooltipText: {
+    color: '#d2bbff',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  seekGlow: {
+    backgroundColor: '#7C3AED',
+    borderRadius: 6,
+    height: 12,
+    position: 'absolute',
+    top: 14,
+    width: 12,
   },
   timeRow: {
     flexDirection: 'row',
@@ -868,6 +1135,11 @@ const styles = StyleSheet.create({
     width: 48,
   },
   playPauseButton: {
+    borderRadius: 999,
+    height: 64,
+    width: 64,
+  },
+  playPauseButtonInner: {
     alignItems: 'center',
     borderRadius: 999,
     elevation: 8,
@@ -879,6 +1151,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 12,
     width: 64,
+  },
+  playPauseIconContainer: {
+    alignItems: 'center',
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  playPauseIconLayer: {
+    alignItems: 'center',
+    height: 32,
+    justifyContent: 'center',
+    position: 'absolute',
+    width: 32,
   },
   playIconOffset: {
     marginLeft: 3,
@@ -1052,3 +1337,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+
+
+
+
+
+
+
