@@ -3,12 +3,14 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
+import LikeButton from './LikeButton';
 
 type SongOptionsSheetProps = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
   thumbnail?: string;
   title: string;
   channel: string;
+  isLiked?: boolean;
   onLike: () => void | Promise<void>;
   onAddToPlaylist: () => void | Promise<void>;
   onAddToQueue?: () => void | Promise<void>;
@@ -23,6 +25,7 @@ export default function SongOptionsSheet({
   thumbnail,
   title,
   channel,
+  isLiked = false,
   onLike,
   onAddToPlaylist,
   onAddToQueue,
@@ -62,8 +65,10 @@ export default function SongOptionsSheet({
           style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
           onPress={() => void onLike()}
         >
-          <Ionicons name="heart-outline" size={24} color="rgba(255,255,255,0.85)" />
-          <Text style={styles.actionText}>Like</Text>
+          <View style={styles.likeButtonWrap}>
+            <LikeButton isLiked={isLiked} onToggle={() => void onLike()} size={24} />
+          </View>
+          <Text style={styles.actionText}>{isLiked ? 'Liked' : 'Like'}</Text>
         </Pressable>
 
         <Pressable
@@ -155,6 +160,9 @@ const styles = StyleSheet.create({
   },
   actionPressed: {
     backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  likeButtonWrap: {
+    marginHorizontal: -8,
   },
   actionText: {
     color: '#e2e2e2',
