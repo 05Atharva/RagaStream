@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
+import AnimatedBottomSheet from './AnimatedBottomSheet';
 import { pausePlayback } from '../services/audioPlayer';
 import { usePlayerStore } from '../store/playerStore';
 
@@ -14,10 +14,11 @@ const TIMER_OPTIONS = [
 ] as const;
 
 type SleepTimerProps = {
-  sheetRef: React.RefObject<BottomSheetModal | null>;
+  isVisible: boolean;
+  onClose: () => void;
 };
 
-export default function SleepTimer({ sheetRef }: SleepTimerProps) {
+export default function SleepTimer({ isVisible, onClose }: SleepTimerProps) {
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -71,13 +72,13 @@ export default function SleepTimer({ sheetRef }: SleepTimerProps) {
     }, durationMs);
 
     Toast.show({ type: 'success', text1: `Sleep timer set for ${minutes} minutes` });
-    sheetRef.current?.dismiss();
+    onClose();
   };
 
   const cancelTimer = () => {
     clearTimers();
     Toast.show({ type: 'info', text1: 'Sleep timer cancelled' });
-    sheetRef.current?.dismiss();
+    onClose();
   };
 
   const isActive = remainingMs !== null && remainingMs > 0;
@@ -90,19 +91,14 @@ export default function SleepTimer({ sheetRef }: SleepTimerProps) {
   };
 
   return (
-    <BottomSheetModal
-      ref={sheetRef}
-      snapPoints={['48%']}
-      backgroundStyle={styles.sheetBackground}
-      handleIndicatorStyle={styles.sheetHandle}
-    >
-      <BottomSheetView style={styles.container}>
+    <AnimatedBottomSheet isVisible={isVisible} onClose={onClose}>
+      <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.title}>Sleep Timer</Text>
           <Pressable
             hitSlop={8}
-            onPress={() => sheetRef.current?.dismiss()}
+            onPress={onClose}
             style={styles.closeBtn}
           >
             <Ionicons name="close" size={22} color="rgba(204,195,216,0.9)" />
@@ -141,8 +137,8 @@ export default function SleepTimer({ sheetRef }: SleepTimerProps) {
           <Ionicons name="moon-outline" size={14} color="rgba(204,195,216,0.45)" />
           <Text style={styles.captionText}>Music will fade out and pause automatically.</Text>
         </View>
-      </BottomSheetView>
-    </BottomSheetModal>
+      </View>
+    </AnimatedBottomSheet>
   );
 }
 
@@ -155,12 +151,6 @@ export function useSleepTimerActive(): boolean {
 }
 
 const styles = StyleSheet.create({
-  sheetBackground: {
-    backgroundColor: '#1a1c1c',
-  },
-  sheetHandle: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
   container: {
     flex: 1,
     paddingBottom: 16,

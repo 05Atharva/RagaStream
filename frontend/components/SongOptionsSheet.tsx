@@ -1,12 +1,13 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
+import AnimatedBottomSheet from './AnimatedBottomSheet';
 import LikeButton from './LikeButton';
 
 type SongOptionsSheetProps = {
-  sheetRef: React.RefObject<BottomSheetModal | null>;
+  isVisible: boolean;
+  onClose: () => void;
   thumbnail?: string;
   title: string;
   channel: string;
@@ -15,13 +16,11 @@ type SongOptionsSheetProps = {
   onAddToPlaylist: () => void | Promise<void>;
   onAddToQueue?: () => void | Promise<void>;
   onShare: () => void;
-  snapPoints?: string[];
 };
 
-const DEFAULT_SNAP_POINTS = ['40%', '54%'];
-
 export default function SongOptionsSheet({
-  sheetRef,
+  isVisible,
+  onClose,
   thumbnail,
   title,
   channel,
@@ -30,16 +29,10 @@ export default function SongOptionsSheet({
   onAddToPlaylist,
   onAddToQueue,
   onShare,
-  snapPoints = DEFAULT_SNAP_POINTS,
 }: SongOptionsSheetProps) {
   return (
-    <BottomSheetModal
-      ref={sheetRef}
-      snapPoints={snapPoints}
-      backgroundStyle={styles.bg}
-      handleIndicatorStyle={styles.handle}
-    >
-      <BottomSheetView style={styles.container}>
+    <AnimatedBottomSheet isVisible={isVisible} onClose={onClose}>
+      <View style={styles.container}>
         {/* Song context row */}
         <View style={styles.songInfo}>
           <View style={styles.thumbWrap}>
@@ -96,18 +89,12 @@ export default function SongOptionsSheet({
           <Ionicons name="share-social-outline" size={24} color="rgba(255,255,255,0.85)" />
           <Text style={styles.actionText}>Share YouTube link</Text>
         </Pressable>
-      </BottomSheetView>
-    </BottomSheetModal>
+      </View>
+    </AnimatedBottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  bg: {
-    backgroundColor: '#1a1c1c',
-  },
-  handle: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
-  },
   container: {
     flex: 1,
     paddingBottom: 20,
