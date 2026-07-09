@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  FlatList,
   Linking,
   Pressable,
   StyleProp,
@@ -18,7 +19,7 @@ import SafeBlurView from '../components/SafeBlurView';
 import SongOptionsSheet from '../components/SongOptionsSheet';
 import LikeButton from '../components/LikeButton';
 import Slider from '@react-native-community/slider';
-import { BottomSheetFlatList, BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
+import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
 import { Image } from 'expo-image';
 import SleepTimer from '../components/SleepTimer';
 import EqualizerBars from '../components/EqualizerBars';
@@ -55,7 +56,6 @@ import { queryClient } from '../services/queryClient';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import { usePlayerStore, type RepeatModeValue, type Track } from '../store/playerStore';
 
-const DISMISS_THRESHOLD = 120;
 const MIN_ART_PADDING = 48;
 const MORPH_DURATION_MS = 180;
 const PRESS_SPRING = {
@@ -168,7 +168,7 @@ export default function NowPlayingScreen() {
   const [sliderWidth, setSliderWidth] = useState(0);
   const [isSeeking, setIsSeeking] = useState(false);
   const [seekingPosition, setSeekingPosition] = useState(0);
-  const translateY = useSharedValue(0);
+  const translateY = useSharedValue(height);
   const artRotation = useSharedValue(0);
   const glowOpacity = useSharedValue(0.3);
   const playPauseScale = useSharedValue(1);
@@ -177,15 +177,15 @@ export default function NowPlayingScreen() {
   const seekTooltipOpacity = useSharedValue(0);
   const seekTooltipTranslateY = useSharedValue(8);
   const seekGlowOpacity = useSharedValue(0.4);
-  const playlistsSheetRef = useRef<BottomSheetModal>(null);
+  const scrimOpacity = useSharedValue(0);
   const wasPlayingRef = useRef(isPlaying);
   const visualIsPlayingRef = useRef(isPlaying);
-  const queueSheetRef = useRef<BottomSheetModal>(null);
-  const sleepTimerRef = useRef<BottomSheetModal>(null);
-  const songOptionsSheetRef = useRef<BottomSheetModal>(null);
+  const [isPlaylistsVisible, setIsPlaylistsVisible] = useState(false);
+  const [isQueueVisible, setIsQueueVisible] = useState(false);
+  const [isSleepTimerVisible, setIsSleepTimerVisible] = useState(false);
+  const [isSongOptionsVisible, setIsSongOptionsVisible] = useState(false);
 
   const albumSize = Math.min(width - MIN_ART_PADDING, height * 0.38, 320);
-  const bottomSheetSnapPoints = useMemo(() => ['55%', '82%'], []);
 
   const thumbnailSource = useMemo(() => {
     if (!currentTrack) {
@@ -270,17 +270,21 @@ export default function NowPlayingScreen() {
     navigation.goBack();
   };
 
+  const dismissThreshold = height * 0.3;
+
   const panGesture = Gesture.Pan()
     .activeOffsetY(15)
     .onUpdate((event) => {
       translateY.value = Math.max(0, event.translationY);
+      scrimOpacity.value = Math.max(0, 1 - translateY.value / height);
     })
     .onEnd(() => {
-      if (translateY.value > DISMISS_THRESHOLD) {
+      if (translateY.value > dismissThreshold) {
         // Dismiss immediately — let the navigation modal animation handle
         // the exit. Animating translateY to full screen height first caused
         // crashes on Android because goBack() ran with an invalid layout.
         translateY.value = withTiming(300, { duration: 150 });
+        scrimOpacity.value = withTiming(0, { duration: 150 });
         runOnJS(dismiss)();
         return;
       }
@@ -288,6 +292,7 @@ export default function NowPlayingScreen() {
         damping: 18,
         stiffness: 180,
       });
+      scrimOpacity.value = withTiming(1, { duration: 200 });
     });
 
   const containerAnimatedStyle = useAnimatedStyle(() => ({
@@ -328,6 +333,10 @@ export default function NowPlayingScreen() {
 
   const seekGlowAnimatedStyle = useAnimatedStyle(() => ({
     opacity: seekGlowOpacity.value,
+  }));
+
+  const scrimAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: scrimOpacity.value,
   }));
 
   useEffect(() => {
@@ -393,6 +402,11 @@ export default function NowPlayingScreen() {
       false
     );
   }, [currentTrack, seekGlowOpacity]);
+
+  useEffect(() => {
+    translateY.value = withSpring(0, { damping: 20, stiffness: 150 });
+    scrimOpacity.value = withTiming(1, { duration: 300 });
+  }, [scrimOpacity, translateY]);
 
   useEffect(() => {
     visualIsPlayingRef.current = isPlaying;
@@ -479,7 +493,7 @@ export default function NowPlayingScreen() {
   }, []);
 
   const handleOpenPlaylists = async () => {
-    playlistsSheetRef.current?.present();
+    setIsPlaylistsVisible(true);
     if (playlists.length === 0) {
       await loadPlaylists();
     }
@@ -489,7 +503,7 @@ export default function NowPlayingScreen() {
     try {
       const songId = await ensureSongInCatalogue();
       await apiClient.post(`/playlists/${playlist.id}/songs`, { song_id: songId });
-      playlistsSheetRef.current?.dismiss();
+      setIsPlaylistsVisible(false);
       Toast.show({
         type: 'success',
         text1: `Added to ${playlist.name}`,
@@ -503,7 +517,7 @@ export default function NowPlayingScreen() {
   };
 
   const handleOpenQueue = () => {
-    queueSheetRef.current?.present();
+    setIsQueueVisible(true);
   };
 
   const handleQueueDragEnd = async ({ data }: { data: Track[] }) => {
@@ -708,7 +722,7 @@ export default function NowPlayingScreen() {
                 />
               </>
             ) : null}
-            <View style={styles.overlay} />
+            <Animated.View pointerEvents="none" style={[styles.overlay, scrimAnimatedStyle]} />
 
             {/* Header */}
             <View style={styles.header}>
@@ -716,7 +730,7 @@ export default function NowPlayingScreen() {
                 <Ionicons name="chevron-down" size={24} color="rgba(255,255,255,0.9)" />
               </Pressable>
               <Text style={styles.headerLabel}>NOW PLAYING</Text>
-              <Pressable hitSlop={8} onPress={() => songOptionsSheetRef.current?.present()} style={styles.headerBtn}>
+              <Pressable hitSlop={8} onPress={() => setIsSongOptionsVisible(true)} style={styles.headerBtn}>
                 <Ionicons name="ellipsis-vertical" size={20} color="rgba(255,255,255,0.9)" />
               </Pressable>
             </View>
@@ -868,7 +882,7 @@ export default function NowPlayingScreen() {
                 <Pressable onPress={handleOpenQueue} style={styles.actionButton}>
                   <Ionicons name="list-outline" size={24} color="rgba(255,255,255,0.7)" />
                 </Pressable>
-                <Pressable style={styles.actionButton} onPress={() => sleepTimerRef.current?.present()}>
+                <Pressable style={styles.actionButton} onPress={() => setIsSleepTimerVisible(true)}>
                   <Ionicons name="moon-outline" size={24} color="rgba(255,255,255,0.7)" />
                 </Pressable>
               </View>
@@ -878,15 +892,13 @@ export default function NowPlayingScreen() {
       </GestureDetector>
 
       {/* Add to Playlist sheet */}
-      <BottomSheetModal
-        ref={playlistsSheetRef}
-        snapPoints={bottomSheetSnapPoints}
-        backgroundStyle={styles.sheetBg}
-        handleIndicatorStyle={styles.sheetHandle}
+      <AnimatedBottomSheet
+        isVisible={isPlaylistsVisible}
+        onClose={() => setIsPlaylistsVisible(false)}
       >
-        <BottomSheetView style={styles.sheetContainer}>
+        <View style={styles.sheetContainer}>
           <Text style={styles.sheetTitle}>Add To Playlist</Text>
-          <BottomSheetFlatList
+          <FlatList
             data={playlists}
             keyExtractor={(item) => item.id}
             renderItem={renderPlaylistItem}
@@ -896,17 +908,16 @@ export default function NowPlayingScreen() {
               </Text>
             }
           />
-        </BottomSheetView>
-      </BottomSheetModal>
+        </View>
+      </AnimatedBottomSheet>
 
       {/* Queue sheet */}
-      <BottomSheetModal
-        ref={queueSheetRef}
-        snapPoints={bottomSheetSnapPoints}
-        backgroundStyle={styles.queueSheetBg}
-        handleIndicatorStyle={styles.sheetHandle}
+      <AnimatedBottomSheet
+        isVisible={isQueueVisible}
+        onClose={() => setIsQueueVisible(false)}
+        backgroundColor="rgba(12,15,15,0.97)"
       >
-        <BottomSheetView style={styles.queueSheetContent}>
+        <View style={styles.queueSheetContent}>
           <View style={styles.queueSheetHeader}>
             <Text style={styles.queueSheetTitle}>Up Next</Text>
             <Pressable onPress={() => void handleShuffleToggle()} style={styles.queueShuffleBtn}>
@@ -927,12 +938,13 @@ export default function NowPlayingScreen() {
               }
             />
           </View>
-        </BottomSheetView>
-      </BottomSheetModal>
+        </View>
+      </AnimatedBottomSheet>
 
       {/* Song options sheet */}
       <SongOptionsSheet
-        sheetRef={songOptionsSheetRef}
+        isVisible={isSongOptionsVisible}
+        onClose={() => setIsSongOptionsVisible(false)}
         thumbnail={thumbnailSource}
         title={currentTrack?.title ?? ''}
         channel={channelName}
@@ -942,7 +954,7 @@ export default function NowPlayingScreen() {
         onShare={handleShareYouTube}
       />
 
-      <SleepTimer sheetRef={sleepTimerRef} />
+      <SleepTimer isVisible={isSleepTimerVisible} onClose={() => setIsSleepTimerVisible(false)} />
     </>
   );
 }
@@ -1293,12 +1305,6 @@ const styles = StyleSheet.create({
   },
 
   // ── Playlists sheet ──
-  sheetBg: {
-    backgroundColor: '#1a1c1c',
-  },
-  sheetHandle: {
-    backgroundColor: 'rgba(74,68,85,0.5)',
-  },
   sheetContainer: {
     flex: 1,
     paddingHorizontal: 20,
