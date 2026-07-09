@@ -6,6 +6,7 @@ import Animated, {
   Easing,
   useAnimatedStyle,
   useSharedValue,
+  withSequence,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
@@ -30,6 +31,8 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const translateY = useSharedValue(MINI_PLAYER_HEIGHT);
+  const pressScale = useSharedValue(1);
+  const pressOpacity = useSharedValue(1);
   const playPauseScale = useSharedValue(1);
   const playPauseProgress = useSharedValue(isPlaying ? 1 : 0);
   const visualIsPlayingRef = useRef(isPlaying);
@@ -56,7 +59,8 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
   }, [isPlaying, playPauseProgress]);
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }],
+    opacity: pressOpacity.value,
+    transform: [{ translateY: translateY.value }, { scale: pressScale.value }],
   }));
 
   const playPauseButtonStyle = useAnimatedStyle(() => ({
@@ -102,6 +106,18 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
     void handleTogglePlay();
   };
 
+  const handleTrackAreaPress = () => {
+    pressScale.value = withSequence(
+      withTiming(1.02, { duration: 150 }),
+      withTiming(1.0, { duration: 200 })
+    );
+    pressOpacity.value = withTiming(0.8, { duration: 150 });
+    setTimeout(() => {
+      pressOpacity.value = withTiming(1.0, { duration: 200 });
+      onOpenNowPlaying();
+    }, 150);
+  };
+
   const handleNext = async () => {
     try {
       await TrackPlayer.skipToNext();
@@ -122,7 +138,7 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
         <View style={styles.progressFill} />
       </View>
 
-      <Pressable style={styles.trackArea} onPress={onOpenNowPlaying}>
+      <Pressable style={styles.trackArea} onPress={handleTrackAreaPress}>
         <Image
           source={thumbnailSource ? { uri: thumbnailSource } : undefined}
           style={styles.thumbnail}
