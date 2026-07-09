@@ -23,6 +23,7 @@ import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
 import { Image } from 'expo-image';
 import SleepTimer from '../components/SleepTimer';
 import SkeletonLoader from '../components/SkeletonLoader';
+import ReconnectingToast from '../components/ReconnectingToast';
 import EqualizerBars from '../components/EqualizerBars';
 import {
   Gesture,
@@ -160,6 +161,7 @@ export default function NowPlayingScreen() {
   const removeFromQueue = usePlayerStore((state) => state.removeFromQueue);
   const setPosition = usePlayerStore((state) => state.setPosition);
   const setDuration = usePlayerStore((state) => state.setDuration);
+  const showReconnecting = usePlayerStore((state) => state.showReconnecting);
   const [progress, setProgress] = useState<ProgressState>({ position: 0, duration: 0 });
   const [isLiked, setIsLiked] = useState(false);
   const [resolvedSongId, setResolvedSongId] = useState<string | null>(null);
@@ -724,6 +726,9 @@ export default function NowPlayingScreen() {
               </>
             ) : null}
             <Animated.View pointerEvents="none" style={[styles.overlay, scrimAnimatedStyle]} />
+
+            {/* Reconnecting toast — absolutely positioned, won't affect layout */}
+            <ReconnectingToast visible={showReconnecting} />
 
             {/* Header */}
             <View style={styles.header}>

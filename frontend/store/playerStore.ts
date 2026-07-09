@@ -27,6 +27,7 @@ type PlayerStore = {
   shuffle: boolean;
   currentPosition: number;
   duration: number;
+  showReconnecting: boolean;
   setCurrentTrack: (track: Track | null) => void;
   togglePlay: () => Promise<void>;
   setQueue: (queue: Track[]) => Promise<void>;
@@ -37,6 +38,7 @@ type PlayerStore = {
   toggleShuffle: () => void;
   setPosition: (position: number) => void;
   setDuration: (duration: number) => void;
+  setShowReconnecting: (show: boolean) => void;
 };
 
 type TrackPlayerModule = typeof import('react-native-track-player');
@@ -113,6 +115,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   shuffle: false,
   currentPosition: 0,
   duration: 0,
+  showReconnecting: false,
   setCurrentTrack: (track) => set({ currentTrack: track }),
   togglePlay: async () => {
     const module = loadTrackPlayerModule();
@@ -249,6 +252,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   toggleShuffle: () => set((state) => ({ shuffle: !state.shuffle })),
   setPosition: (currentPosition) => set({ currentPosition }),
   setDuration: (duration) => set({ duration }),
+  setShowReconnecting: (show) => set({ showReconnecting: show }),
 }));
 
 const initializeTrackPlayerSync = () => {
