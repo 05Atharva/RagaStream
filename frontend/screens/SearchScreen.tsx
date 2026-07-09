@@ -14,7 +14,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { FlashList } from '@shopify/flash-list';
-import { BottomSheetFlatList, BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
+import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
+import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
@@ -93,8 +94,8 @@ export default function SearchScreen({ route, navigation }: Props) {
   const [playlists, setPlaylists] = useState<PlaylistRecord[]>([]);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const menuSheetRef = useRef<BottomSheetModal>(null);
-  const playlistSheetRef = useRef<BottomSheetModal>(null);
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const [isPlaylistVisible, setIsPlaylistVisible] = useState(false);
 
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const addToQueue = usePlayerStore((state) => state.addToQueue);
@@ -151,7 +152,6 @@ export default function SearchScreen({ route, navigation }: Props) {
 
   const selectedIsLiked = Boolean(selectedLikedSong);
 
-  const playlistSnapPoints = useMemo(() => ['50%', '75%'], []);
 
   const handlePlayResult = async (item: YouTubeSearchResult) => {
     if (isRowLoading) return;
@@ -196,7 +196,7 @@ export default function SearchScreen({ route, navigation }: Props) {
 
   const handleOpenMenu = (item: YouTubeSearchResult) => {
     setSelectedResult(item);
-    menuSheetRef.current?.present();
+    setIsMenuVisible(true);
   };
 
   const handleLike = async () => {
@@ -300,8 +300,8 @@ export default function SearchScreen({ route, navigation }: Props) {
   };
 
   const handleOpenPlaylistSheet = async () => {
-    menuSheetRef.current?.dismiss();
-    playlistSheetRef.current?.present();
+    setIsMenuVisible(false);
+    setIsPlaylistVisible(true);
     if (playlists.length === 0) await loadPlaylists();
   };
 
@@ -317,7 +317,7 @@ export default function SearchScreen({ route, navigation }: Props) {
       });
       await apiClient.post(`/playlists/${playlist.id}/songs`, { song_id: songId });
       Toast.show({ type: 'success', text1: `Added to ${playlist.name}` });
-      playlistSheetRef.current?.dismiss();
+      setIsPlaylistVisible(false);
     } catch {
       Toast.show({ type: 'error', text1: 'Could not add to playlist' });
     }
@@ -406,10 +406,14 @@ export default function SearchScreen({ route, navigation }: Props) {
     results !== undefined &&
     results.length === 0;
 
+  const hasAnimated = useRef(false);
+  useEffect(() => { hasAnimated.current = true; }, []);
+  const entering = !hasAnimated.current;
+
   return (
     <SafeAreaView style={styles.container}>
       {/* ── Search bar ── */}
-      <View style={styles.header}>
+      <Animated.View entering={entering ? FadeInDown.delay(0).duration(300) : undefined} style={styles.header}>
         <View style={styles.searchBar}>
           <Ionicons
             name="search-outline"
@@ -432,10 +436,11 @@ export default function SearchScreen({ route, navigation }: Props) {
             </Pressable>
           )}
         </View>
-      </View>
+      </Animated.View>
 
       {/* ── State: Default — gradient genre grid ── */}
       {showDefaultState ? (
+        <Animated.View entering={entering ? FadeInUp.delay(60).duration(350) : undefined} style={{ flex: 1 }}>
         <FlatList
           data={GENRE_CARDS}
           numColumns={2}
@@ -446,6 +451,7 @@ export default function SearchScreen({ route, navigation }: Props) {
           ListHeaderComponent={<Text style={styles.browseHeader}>Browse all</Text>}
           renderItem={renderGenreCard}
         />
+        </Animated.View>
       ) : showNoResults ? (
         /* ── State: No results — centered empty layout ── */
         <ScrollView
@@ -499,7 +505,8 @@ export default function SearchScreen({ route, navigation }: Props) {
 
       {/* ── Song options bottom sheet ── */}
       <SongOptionsSheet
-        sheetRef={menuSheetRef}
+        isVisible={isMenuVisible}
+        onClose={() => setIsMenuVisible(false)}
         thumbnail={selectedResult?.thumbnail}
         title={selectedResult?.title ?? ''}
         channel={selectedResult?.channel ?? ''}
@@ -511,15 +518,14 @@ export default function SearchScreen({ route, navigation }: Props) {
       />
 
       {/* ── Playlist picker bottom sheet ── */}
-      <BottomSheetModal
-        ref={playlistSheetRef}
-        snapPoints={playlistSnapPoints}
-        backgroundStyle={styles.sheetBg}
-        handleIndicatorStyle={styles.sheetHandle}
+      <AnimatedBottomSheet
+        isVisible={isPlaylistVisible}
+        onClose={() => setIsPlaylistVisible(false)}
+        backgroundColor="#121414"
       >
-        <BottomSheetView style={styles.sheetContainer}>
+        <View style={styles.sheetContainer}>
           <Text style={styles.sheetPickerTitle}>Add To Playlist</Text>
-          <BottomSheetFlatList
+          <FlatList
             data={playlists}
             keyExtractor={(item) => item.id}
             renderItem={renderPlaylistItem}
@@ -529,8 +535,8 @@ export default function SearchScreen({ route, navigation }: Props) {
               </Text>
             }
           />
-        </BottomSheetView>
-      </BottomSheetModal>
+        </View>
+      </AnimatedBottomSheet>
     </SafeAreaView>
   );
 }
@@ -707,8 +713,6 @@ const styles = StyleSheet.create({
   },
 
   // ── Bottom sheets ──
-  sheetBg: { backgroundColor: '#121414' },
-  sheetHandle: { backgroundColor: 'rgba(255,255,255,0.2)' },
   sheetContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 4 },
   sheetPickerTitle: {
     color: '#FFFFFF',

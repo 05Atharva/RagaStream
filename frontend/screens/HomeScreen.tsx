@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,6 +19,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { MotiView } from 'moti';
+import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { playTrack } from '../services/audioPlayer';
@@ -317,6 +318,10 @@ export default function HomeScreen({ navigation }: Props) {
 
   const bottomPadding = useBottomPadding();
 
+  const hasAnimated = useRef(false);
+  useEffect(() => { hasAnimated.current = true; }, []);
+  const entering = !hasAnimated.current;
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -324,14 +329,15 @@ export default function HomeScreen({ navigation }: Props) {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Header ── */}
-        <View style={styles.header}>
+        <Animated.View entering={entering ? FadeInDown.delay(0).duration(400) : undefined} style={styles.header}>
           <Text style={styles.greeting}>{getGreeting(displayName)}</Text>
           <Pressable onPress={handleLogout} style={styles.avatar} hitSlop={10}>
             <Text style={styles.avatarText}>{avatarLetter}</Text>
           </Pressable>
-        </View>
+        </Animated.View>
 
         {/* ── Genre filter chips (no section header) ── */}
+        <Animated.View entering={entering ? FadeInDown.delay(100).duration(400) : undefined}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -369,9 +375,10 @@ export default function HomeScreen({ navigation }: Props) {
             </Pressable>
           ))}
         </ScrollView>
+        </Animated.View>
 
         {/* ── Featured Today — horizontal snap carousel ── */}
-        <View style={styles.section}>
+        <Animated.View entering={entering ? FadeInUp.delay(0).duration(350) : undefined} style={styles.section}>
           <SectionHeader title="Featured Today" />
           {isFeaturedLoading ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} scrollEnabled={false}>
@@ -441,10 +448,10 @@ export default function HomeScreen({ navigation }: Props) {
               ))}
             </ScrollView>
           )}
-        </View>
+        </Animated.View>
 
         {/* ── Quick Picks — 2-col bento grid, horizontal row cards ── */}
-        <View style={styles.section}>
+        <Animated.View entering={entering ? FadeInUp.delay(80).duration(350) : undefined} style={styles.section}>
           <SectionHeader title="Quick Picks" />
           {isQuickPicksLoading ? (
             <View style={styles.bentoGrid}>
@@ -493,10 +500,10 @@ export default function HomeScreen({ navigation }: Props) {
               )}
             />
           )}
-        </View>
+        </Animated.View>
 
         {/* ── Recently Played — horizontal scroll, 112px cards ── */}
-        <View style={styles.section}>
+        <Animated.View entering={entering ? FadeInUp.delay(160).duration(350) : undefined} style={styles.section}>
           <SectionHeader title="Recently Played" />
           {isHistoryLoading ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -546,7 +553,7 @@ export default function HomeScreen({ navigation }: Props) {
               )}
             />
           )}
-        </View>
+        </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );

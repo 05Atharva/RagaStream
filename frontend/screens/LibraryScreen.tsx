@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -11,8 +11,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FlashList } from '@shopify/flash-list';
-import { BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
 import { Ionicons } from '@expo/vector-icons';
+import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
+import Animated, { Keyframe, SlideInLeft } from 'react-native-reanimated';
+
+const likedCardIn = new Keyframe({
+  0: { opacity: 0, transform: [{ scale: 0.95 }, { translateY: -10 }] },
+  100: { opacity: 1, transform: [{ scale: 1 }, { translateY: 0 }] },
+});
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Swipeable } from 'react-native-gesture-handler';
@@ -42,7 +48,7 @@ export default function LibraryScreen({ navigation }: Props) {
   const rootNavigation = navigation.getParent<NativeStackNavigationProp<RootStackParamList>>();
   const [playlistName, setPlaylistName] = useState('');
   const [inputFocused, setInputFocused] = useState(false);
-  const sheetRef = useRef<BottomSheetModal>(null);
+  const [isCreateSheetVisible, setIsCreateSheetVisible] = useState(false);
 
   const likedQuery = useQuery({
     queryKey: ['liked'],
@@ -68,11 +74,14 @@ export default function LibraryScreen({ navigation }: Props) {
 
   const likedCount = likedQuery.data?.length ?? 0;
   const playlists = playlistsQuery.data ?? [];
-  const snapPoints = useMemo(() => ['58%'], []);
   const bottomPadding = useBottomPadding();
 
+  const hasAnimated = useRef(false);
+  useEffect(() => { hasAnimated.current = true; }, []);
+  const entering = !hasAnimated.current;
+
   const openCreateSheet = () => {
-    sheetRef.current?.present();
+    setIsCreateSheetVisible(true);
   };
 
   const handleCreatePlaylist = async () => {
@@ -84,7 +93,7 @@ export default function LibraryScreen({ navigation }: Props) {
     try {
       await apiClient.post('/playlists', { name, description: '' });
       setPlaylistName('');
-      sheetRef.current?.dismiss();
+      setIsCreateSheetVisible(false);
       await queryClient.invalidateQueries({ queryKey: ['playlists'] });
       Toast.show({ type: 'success', text1: 'Playlist created' });
     } catch {
@@ -134,6 +143,7 @@ export default function LibraryScreen({ navigation }: Props) {
       </View>
 
       {/* ── Liked Songs hero card ── */}
+      <Animated.View entering={entering ? likedCardIn.duration(400) : undefined}>
       <Pressable
         onPress={() => rootNavigation?.navigate('LikedSongs')}
         style={({ pressed }) => [styles.likedCard, pressed && styles.cardPressed]}
@@ -161,15 +171,16 @@ export default function LibraryScreen({ navigation }: Props) {
           </View>
         </LinearGradient>
       </Pressable>
+      </Animated.View>
 
       {/* ── Playlists section ── */}
-      <View style={styles.sectionRow}>
+      <Animated.View entering={entering ? SlideInLeft.delay(150).duration(300) : undefined} style={styles.sectionRow}>
         <Text style={styles.sectionTitle}>Playlists</Text>
         <Pressable onPress={openCreateSheet} style={styles.newPlaylistBtn} hitSlop={8}>
           <Ionicons name="add" size={16} color="#7C3AED" />
           <Text style={styles.newPlaylistText}>New</Text>
         </Pressable>
-      </View>
+      </Animated.View>
 
       <FlashList
         data={playlists}
@@ -224,17 +235,16 @@ export default function LibraryScreen({ navigation }: Props) {
       />
 
       {/* ── Create playlist bottom sheet ── */}
-      <BottomSheetModal
-        ref={sheetRef}
-        snapPoints={snapPoints}
-        backgroundStyle={styles.sheetBg}
-        handleIndicatorStyle={styles.sheetHandle}
+      <AnimatedBottomSheet
+        isVisible={isCreateSheetVisible}
+        onClose={() => setIsCreateSheetVisible(false)}
+        backgroundColor="#1E2020"
       >
-        <BottomSheetView style={styles.sheetContainer}>
+        <View style={styles.sheetContainer}>
           {/* Sheet header: close button + title */}
           <View style={styles.sheetHeaderRow}>
             <Pressable
-              onPress={() => sheetRef.current?.dismiss()}
+              onPress={() => setIsCreateSheetVisible(false)}
               hitSlop={8}
               style={styles.sheetCloseBtn}
             >
@@ -287,8 +297,8 @@ export default function LibraryScreen({ navigation }: Props) {
               Create
             </Text>
           </Pressable>
-        </BottomSheetView>
-      </BottomSheetModal>
+        </View>
+      </AnimatedBottomSheet>
     </SafeAreaView>
   );
 }
@@ -446,8 +456,6 @@ const styles = StyleSheet.create({
   },
 
   // ── Create playlist sheet ──
-  sheetBg: { backgroundColor: '#1E2020' },
-  sheetHandle: { backgroundColor: 'rgba(255,255,255,0.2)' },
   sheetContainer: {
     flex: 1,
     paddingHorizontal: 20,
