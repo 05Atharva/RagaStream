@@ -35,7 +35,9 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
   const pressOpacity = useSharedValue(1);
   const playPauseScale = useSharedValue(1);
   const playPauseProgress = useSharedValue(isPlaying ? 1 : 0);
+  const trackDipOpacity = useSharedValue(0);
   const visualIsPlayingRef = useRef(isPlaying);
+  const trackDipInitialRef = useRef(true);
 
   useEffect(() => {
     if (!currentTrack) {
@@ -49,6 +51,19 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
       easing: Easing.out(Easing.cubic),
     });
   }, [currentTrack, translateY]);
+
+  useEffect(() => {
+    if (trackDipInitialRef.current) {
+      trackDipInitialRef.current = false;
+      return;
+    }
+    if (!currentTrack) return;
+    trackDipOpacity.value = withSequence(
+      withTiming(1, { duration: 300 }),
+      withTiming(0, { duration: 400 }),
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack?.id, trackDipOpacity]);
 
   useEffect(() => {
     visualIsPlayingRef.current = isPlaying;
@@ -75,6 +90,10 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
   const pauseIconStyle = useAnimatedStyle(() => ({
     opacity: playPauseProgress.value,
     transform: [{ scale: 0.7 + playPauseProgress.value * 0.3 }],
+  }));
+
+  const dipStyle = useAnimatedStyle(() => ({
+    opacity: trackDipOpacity.value,
   }));
 
   if (!currentTrack) {
@@ -179,6 +198,7 @@ export default function MiniPlayer({ onOpenNowPlaying }: MiniPlayerProps) {
           <Ionicons name="play-skip-forward" size={24} color="#FFFFFF" />
         </Pressable>
       </View>
+      <Animated.View pointerEvents="none" style={[styles.dipOverlay, dipStyle]} />
     </Animated.View>
   );
 }
@@ -277,5 +297,9 @@ const styles = StyleSheet.create({
   },
   playIconOffset: {
     marginLeft: 2,
+  },
+  dipOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.65)',
   },
 });
