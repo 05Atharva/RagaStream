@@ -19,7 +19,16 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import PressableCard from '../components/PressableCard';
 import SkeletonLoader from '../components/SkeletonLoader';
-import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import Animated, {
+  FadeInDown,
+  FadeInUp,
+  interpolate,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { playTrack } from '../services/audioPlayer';
@@ -79,6 +88,41 @@ function getGreeting(displayName?: string | null) {
 
 function SectionHeader({ title }: { title: string }) {
   return <Text style={styles.sectionTitle}>{title}</Text>;
+}
+
+type ChipProps = { label: string; isSelected: boolean; onPress: () => void };
+
+function AnimatedChip({ label, isSelected, onPress }: ChipProps) {
+  const selection = useSharedValue(isSelected ? 1 : 0);
+  const scaleVal = useSharedValue(isSelected ? 1.05 : 1);
+  const pressVal = useSharedValue(1);
+
+  useEffect(() => {
+    selection.value = withTiming(isSelected ? 1 : 0, { duration: 200 });
+    scaleVal.value = withSpring(isSelected ? 1.05 : 1, { damping: 18, stiffness: 250 });
+  }, [isSelected, selection, scaleVal]);
+
+  const animStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(selection.value, [0, 1], ['#121414', '#7C3AED']),
+    transform: [{ scale: pressVal.value * scaleVal.value }],
+    shadowColor: '#7C3AED',
+    shadowOpacity: interpolate(selection.value, [0, 1], [0, 0.6]),
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: interpolate(selection.value, [0, 1], [0, 6]),
+  }));
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => { pressVal.value = withSpring(0.96, { damping: 20, stiffness: 300 }); }}
+      onPressOut={() => { pressVal.value = withSpring(1, { damping: 20, stiffness: 300 }); }}
+    >
+      <Animated.View style={[styles.chip, animStyle]}>
+        <Text style={styles.chipText}>{label}</Text>
+      </Animated.View>
+    </Pressable>
+  );
 }
 
 
@@ -326,18 +370,16 @@ export default function HomeScreen({ navigation }: Props) {
           contentContainerStyle={styles.chipsRow}
           style={styles.chipsScroll}
         >
-          <PressableCard
-            style={[styles.chip, selectedGenre === 'All' && styles.chipActive]}
+          <AnimatedChip
+            label="All"
+            isSelected={selectedGenre === 'All'}
             onPress={() => setSelectedGenre('All')}
-          >
-            <Text style={[styles.chipText, selectedGenre === 'All' && styles.chipTextActive]}>
-              All
-            </Text>
-          </PressableCard>
+          />
           {GENRE_CHIPS.map((chip) => (
-            <PressableCard
+            <AnimatedChip
               key={chip.label}
-              style={[styles.chip, selectedGenre === chip.label && styles.chipActive]}
+              label={chip.label}
+              isSelected={selectedGenre === chip.label}
               onPress={() => {
                 setSelectedGenre(chip.label);
                 navigation.navigate('Search', {
@@ -345,16 +387,7 @@ export default function HomeScreen({ navigation }: Props) {
                   autoSearch: true,
                 });
               }}
-            >
-              <Text
-                style={[
-                  styles.chipText,
-                  selectedGenre === chip.label && styles.chipTextActive,
-                ]}
-              >
-                {chip.label}
-              </Text>
-            </PressableCard>
+            />
           ))}
         </ScrollView>
         </Animated.View>
@@ -587,21 +620,16 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
-    backgroundColor: '#333535',
+    borderColor: 'rgba(255,255,255,0.12)',
     borderRadius: 999,
+    borderWidth: 1,
     paddingHorizontal: 16,
     paddingVertical: 8,
-  },
-  chipActive: {
-    backgroundColor: '#F5A623',
   },
   chipText: {
     color: 'rgba(255,255,255,0.9)',
     fontSize: 12,
     fontWeight: '600',
-  },
-  chipTextActive: {
-    color: '#1a1000',
   },
 
   // ── Sections ──

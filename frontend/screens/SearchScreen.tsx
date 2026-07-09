@@ -15,8 +15,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { FlashList } from '@shopify/flash-list';
 import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
-import PressableCard from '../components/PressableCard';
-import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import Animated, {
+  FadeInDown,
+  FadeInUp,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
@@ -80,6 +87,53 @@ const GENRE_CARD_GAP = 12;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const GENRE_CARD_SIZE = (SCREEN_WIDTH - CONTENT_PADDING * 2 - GENRE_CARD_GAP) / 2;
 
+type AnimatedGenreCardProps = {
+  item: GenreCard;
+  isSelected: boolean;
+  onPress: () => void;
+};
+
+function AnimatedGenreCard({ item, isSelected, onPress }: AnimatedGenreCardProps) {
+  const scaleVal = useSharedValue(isSelected ? 1.05 : 1);
+  const glowVal = useSharedValue(isSelected ? 1 : 0);
+  const pressVal = useSharedValue(1);
+
+  useEffect(() => {
+    scaleVal.value = withSpring(isSelected ? 1.05 : 1, { damping: 18, stiffness: 250 });
+    glowVal.value = withTiming(isSelected ? 1 : 0, { duration: 200 });
+  }, [isSelected, scaleVal, glowVal]);
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pressVal.value * scaleVal.value }],
+    shadowColor: '#7C3AED',
+    shadowOpacity: interpolate(glowVal.value, [0, 1], [0, 0.6]),
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: interpolate(glowVal.value, [0, 1], [0, 6]),
+  }));
+
+  return (
+    <Animated.View style={animStyle}>
+      <Pressable
+        style={styles.genreCard}
+        onPress={onPress}
+        onPressIn={() => { pressVal.value = withSpring(0.96, { damping: 20, stiffness: 300 }); }}
+        onPressOut={() => { pressVal.value = withSpring(1, { damping: 20, stiffness: 300 }); }}
+      >
+        <LinearGradient
+          colors={item.colors as [string, string, ...string[]]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.genreGradient}
+        >
+          {item.overlay && <View style={styles.cardOverlay} />}
+          <Text style={styles.genreCardLabel}>{item.label}</Text>
+        </LinearGradient>
+      </Pressable>
+    </Animated.View>
+  );
+}
+
 function formatTime(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '0:00';
   const totalSeconds = Math.floor(value);
@@ -93,6 +147,7 @@ export default function SearchScreen({ route, navigation }: Props) {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [selectedResult, setSelectedResult] = useState<YouTubeSearchResult | null>(null);
   const [isRowLoading, setIsRowLoading] = useState<string | null>(null);
+  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [playlists, setPlaylists] = useState<PlaylistRecord[]>([]);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -336,20 +391,14 @@ export default function SearchScreen({ route, navigation }: Props) {
   };
 
   const renderGenreCard = ({ item }: { item: GenreCard }) => (
-    <PressableCard
-      style={styles.genreCard}
-      onPress={() => handleGenrePress(item.label)}
-    >
-      <LinearGradient
-        colors={item.colors as [string, string, ...string[]]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.genreGradient}
-      >
-        {item.overlay && <View style={styles.cardOverlay} />}
-        <Text style={styles.genreCardLabel}>{item.label}</Text>
-      </LinearGradient>
-    </PressableCard>
+    <AnimatedGenreCard
+      item={item}
+      isSelected={selectedGenre === item.label}
+      onPress={() => {
+        setSelectedGenre(item.label);
+        handleGenrePress(item.label);
+      }}
+    />
   );
 
   const renderResultItem = ({ item }: { item: YouTubeSearchResult }) => {
