@@ -181,8 +181,16 @@ export default function NowPlayingScreen() {
   const seekTooltipTranslateY = useSharedValue(8);
   const seekGlowOpacity = useSharedValue(0.4);
   const scrimOpacity = useSharedValue(0);
+  const trackDipOpacity = useSharedValue(0);
+  const shuffleRotation = useSharedValue(0);
+  const shuffleGlowScale = useSharedValue(1);
+  const shuffleGlowOpacity = useSharedValue(0);
+  const repeatBounce = useSharedValue(1);
   const wasPlayingRef = useRef(isPlaying);
   const visualIsPlayingRef = useRef(isPlaying);
+  const trackDipInitialRef = useRef(true);
+  const shuffleAnimInitialRef = useRef(true);
+  const repeatAnimInitialRef = useRef(true);
   const [isPlaylistsVisible, setIsPlaylistsVisible] = useState(false);
   const [isQueueVisible, setIsQueueVisible] = useState(false);
   const [isSleepTimerVisible, setIsSleepTimerVisible] = useState(false);
@@ -342,6 +350,23 @@ export default function NowPlayingScreen() {
     opacity: scrimOpacity.value,
   }));
 
+  const dipOverlayStyle = useAnimatedStyle(() => ({
+    opacity: trackDipOpacity.value,
+  }));
+
+  const shuffleAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${shuffleRotation.value}deg` }],
+  }));
+
+  const shuffleGlowStyle = useAnimatedStyle(() => ({
+    opacity: shuffleGlowOpacity.value,
+    transform: [{ scale: shuffleGlowScale.value }],
+  }));
+
+  const repeatAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: repeatBounce.value }],
+  }));
+
   useEffect(() => {
     if (isPlaying) {
       const normalizedRotation = ((artRotation.value % 360) + 360) % 360;
@@ -418,6 +443,45 @@ export default function NowPlayingScreen() {
       easing: Easing.out(Easing.cubic),
     });
   }, [isPlaying, playPauseProgress]);
+
+  useEffect(() => {
+    if (trackDipInitialRef.current) {
+      trackDipInitialRef.current = false;
+      return;
+    }
+    if (!currentTrack) return;
+    trackDipOpacity.value = withSequence(
+      withTiming(1, { duration: 300 }),
+      withTiming(0, { duration: 400 }),
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack?.id, trackDipOpacity]);
+
+  useEffect(() => {
+    if (shuffleAnimInitialRef.current) {
+      shuffleAnimInitialRef.current = false;
+      return;
+    }
+    if (shuffle) {
+      shuffleRotation.value = withTiming(shuffleRotation.value + 360, { duration: 400, easing: Easing.out(Easing.quad) });
+      shuffleGlowOpacity.value = withSequence(withTiming(1, { duration: 0 }), withTiming(0, { duration: 400 }));
+      shuffleGlowScale.value = withTiming(1.3, { duration: 400 });
+    } else {
+      shuffleRotation.value = withTiming(shuffleRotation.value - 360, { duration: 400, easing: Easing.out(Easing.quad) });
+    }
+  }, [shuffle, shuffleRotation, shuffleGlowOpacity, shuffleGlowScale]);
+
+  useEffect(() => {
+    if (repeatAnimInitialRef.current) {
+      repeatAnimInitialRef.current = false;
+      return;
+    }
+    repeatBounce.value = withSequence(
+      withSpring(1.25, { damping: 10, stiffness: 300 }),
+      withSpring(0.95, { damping: 12, stiffness: 300 }),
+      withSpring(1.0, { damping: 15, stiffness: 200 }),
+    );
+  }, [repeatMode, repeatBounce]);
 
   const ensureSongInCatalogue = useCallback(async () => {
     if (!currentTrack || !youtubeId) {
@@ -726,6 +790,7 @@ export default function NowPlayingScreen() {
               </>
             ) : null}
             <Animated.View pointerEvents="none" style={[styles.overlay, scrimAnimatedStyle]} />
+            <Animated.View pointerEvents="none" style={[styles.dipOverlay, dipOverlayStyle]} />
 
             {/* Reconnecting toast — absolutely positioned, won't affect layout */}
             <ReconnectingToast visible={showReconnecting} />
@@ -878,18 +943,31 @@ export default function NowPlayingScreen() {
                   <Ionicons name="add-circle-outline" size={24} color="rgba(255,255,255,0.7)" />
                 </Pressable>
                 <Pressable style={styles.actionButton} onPress={() => void handleShuffleToggle()}>
-                  <Ionicons
-                    name="shuffle"
-                    size={24}
-                    color={shuffle ? '#7C3AED' : 'rgba(255,255,255,0.7)'}
-                  />
+                  <View style={styles.shuffleContainer}>
+                    <Animated.View pointerEvents="none" style={[styles.shuffleGlow, shuffleGlowStyle]} />
+                    <Animated.View style={shuffleAnimStyle}>
+                      <Ionicons
+                        name="shuffle"
+                        size={24}
+                        color={shuffle ? '#7C3AED' : 'rgba(255,255,255,0.7)'}
+                      />
+                    </Animated.View>
+                  </View>
                 </Pressable>
                 <Pressable style={styles.actionButton} onPress={() => void cycleRepeatMode()}>
-                  <Ionicons
-                    name={repeatMode === 'one' ? 'repeat-outline' : 'repeat'}
-                    size={24}
-                    color={repeatMode === 'off' ? 'rgba(255,255,255,0.7)' : '#7C3AED'}
-                  />
+                  <Animated.View style={repeatAnimStyle}>
+                    <Ionicons
+                      name={repeatMode === 'one' ? 'repeat-outline' : 'repeat'}
+                      size={24}
+                      color={
+                        repeatMode === 'off'
+                          ? 'rgba(255,255,255,0.7)'
+                          : repeatMode === 'one'
+                          ? '#F5A623'
+                          : '#7C3AED'
+                      }
+                    />
+                  </Animated.View>
                 </Pressable>
                 <Pressable onPress={handleOpenQueue} style={styles.actionButton}>
                   <Ionicons name="list-outline" size={24} color="rgba(255,255,255,0.7)" />
@@ -989,6 +1067,10 @@ const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.62)',
+  },
+  dipOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#0A0A0A',
   },
 
   // ── Header ──
@@ -1206,6 +1288,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     height: 40,
     justifyContent: 'center',
+    width: 40,
+  },
+  shuffleContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shuffleGlow: {
+    backgroundColor: '#7C3AED',
+    borderRadius: 999,
+    height: 40,
+    position: 'absolute',
     width: 40,
   },
 
