@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { FlashList } from '@shopify/flash-list';
 import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
+import PressableCard from '../components/PressableCard';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
@@ -30,6 +31,7 @@ import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import { usePlayerStore, type Track } from '../store/playerStore';
 import { useBottomPadding } from '../hooks/useBottomPadding';
 import SongOptionsSheet from '../components/SongOptionsSheet';
+import SkeletonLoader from '../components/SkeletonLoader';
 
 type Props = BottomTabScreenProps<BottomTabParamList, 'Search'>;
 
@@ -334,8 +336,8 @@ export default function SearchScreen({ route, navigation }: Props) {
   };
 
   const renderGenreCard = ({ item }: { item: GenreCard }) => (
-    <Pressable
-      style={({ pressed }) => [styles.genreCard, pressed && styles.cardPressed]}
+    <PressableCard
+      style={styles.genreCard}
       onPress={() => handleGenrePress(item.label)}
     >
       <LinearGradient
@@ -347,7 +349,7 @@ export default function SearchScreen({ route, navigation }: Props) {
         {item.overlay && <View style={styles.cardOverlay} />}
         <Text style={styles.genreCardLabel}>{item.label}</Text>
       </LinearGradient>
-    </Pressable>
+    </PressableCard>
   );
 
   const renderResultItem = ({ item }: { item: YouTubeSearchResult }) => {
@@ -483,24 +485,38 @@ export default function SearchScreen({ route, navigation }: Props) {
         </ScrollView>
       ) : (
         /* ── State: Results list ── */
-        <View style={styles.resultsWrap}>
-          {(isLoading || isFetching) && (
-            <View style={styles.fetchingRow}>
-              <ActivityIndicator color="#7C3AED" size="small" />
-            </View>
-          )}
-          <FlashList
-            data={results ?? []}
-            keyExtractor={(item) => item.youtube_id}
-            renderItem={renderResultItem}
-            contentContainerStyle={[styles.resultsList, { paddingBottom: bottomPadding }]}
-            ListHeaderComponent={
-              (results?.length ?? 0) > 0 ? (
-                <Text style={styles.resultsHeader}>Top Results</Text>
-              ) : null
-            }
-          />
-        </View>
+        isLoading && !results ? (
+          <View style={styles.skeletonList}>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <View key={i} style={styles.resultSkeletonRow}>
+                <SkeletonLoader width={56} height={56} borderRadius={8} />
+                <View style={styles.skeletonMeta}>
+                  <SkeletonLoader width="70%" height={14} borderRadius={4} />
+                  <SkeletonLoader width="45%" height={12} borderRadius={4} style={{ marginTop: 6 }} />
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.resultsWrap}>
+            {isFetching && (
+              <View style={styles.fetchingRow}>
+                <ActivityIndicator color="#7C3AED" size="small" />
+              </View>
+            )}
+            <FlashList
+              data={results ?? []}
+              keyExtractor={(item) => item.youtube_id}
+              renderItem={renderResultItem}
+              contentContainerStyle={[styles.resultsList, { paddingBottom: bottomPadding }]}
+              ListHeaderComponent={
+                (results?.length ?? 0) > 0 ? (
+                  <Text style={styles.resultsHeader}>Top Results</Text>
+                ) : null
+              }
+            />
+          </View>
+        )
       )}
 
       {/* ── Song options bottom sheet ── */}
@@ -738,6 +754,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     paddingTop: 16,
     textAlign: 'center',
+  },
+
+  // ── Skeleton ──
+  skeletonList: {
+    paddingHorizontal: 8,
+    paddingTop: 8,
+  },
+  resultSkeletonRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+    paddingHorizontal: 8,
+  },
+  skeletonMeta: {
+    flex: 1,
   },
 
   // ── Shared ──

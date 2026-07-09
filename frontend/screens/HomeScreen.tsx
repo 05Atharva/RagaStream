@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
-  type DimensionValue,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,7 +17,8 @@ import { queryClient } from '../services/queryClient';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { MotiView } from 'moti';
+import PressableCard from '../components/PressableCard';
+import SkeletonLoader from '../components/SkeletonLoader';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
@@ -81,24 +81,6 @@ function SectionHeader({ title }: { title: string }) {
   return <Text style={styles.sectionTitle}>{title}</Text>;
 }
 
-function SkeletonBlock({
-  width,
-  height,
-  borderRadius = 16,
-}: {
-  width: DimensionValue;
-  height: number;
-  borderRadius?: number;
-}) {
-  return (
-    <MotiView
-      from={{ opacity: 0.35 }}
-      animate={{ opacity: 0.85 }}
-      transition={{ type: 'timing', duration: 900, loop: true }}
-      style={[styles.skeleton, { width, height, borderRadius }]}
-    />
-  );
-}
 
 export default function HomeScreen({ navigation }: Props) {
   const session = useAuthStore((state) => state.session);
@@ -344,16 +326,16 @@ export default function HomeScreen({ navigation }: Props) {
           contentContainerStyle={styles.chipsRow}
           style={styles.chipsScroll}
         >
-          <Pressable
+          <PressableCard
             style={[styles.chip, selectedGenre === 'All' && styles.chipActive]}
             onPress={() => setSelectedGenre('All')}
           >
             <Text style={[styles.chipText, selectedGenre === 'All' && styles.chipTextActive]}>
               All
             </Text>
-          </Pressable>
+          </PressableCard>
           {GENRE_CHIPS.map((chip) => (
-            <Pressable
+            <PressableCard
               key={chip.label}
               style={[styles.chip, selectedGenre === chip.label && styles.chipActive]}
               onPress={() => {
@@ -372,7 +354,7 @@ export default function HomeScreen({ navigation }: Props) {
               >
                 {chip.label}
               </Text>
-            </Pressable>
+            </PressableCard>
           ))}
         </ScrollView>
         </Animated.View>
@@ -384,7 +366,7 @@ export default function HomeScreen({ navigation }: Props) {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} scrollEnabled={false}>
               <View style={styles.featuredSkeletonRow}>
                 {[0, 1].map((i) => (
-                  <SkeletonBlock
+                  <SkeletonLoader
                     key={i}
                     width={FEATURED_CARD_WIDTH}
                     height={FEATURED_CARD_HEIGHT}
@@ -403,12 +385,9 @@ export default function HomeScreen({ navigation }: Props) {
               contentContainerStyle={styles.featuredScroll}
             >
               {featuredCards.map((item, index) => (
-                <Pressable
+                <PressableCard
                   key={item.youtube_id}
-                  style={({ pressed }) => [
-                    styles.featuredCard,
-                    pressed && styles.cardPressed,
-                  ]}
+                  style={styles.featuredCard}
                   onPress={() => void handlePlayFeatured(item)}
                 >
                   <Image
@@ -444,7 +423,7 @@ export default function HomeScreen({ navigation }: Props) {
                       )}
                     </View>
                   </View>
-                </Pressable>
+                </PressableCard>
               ))}
             </ScrollView>
           )}
@@ -457,10 +436,10 @@ export default function HomeScreen({ navigation }: Props) {
             <View style={styles.bentoGrid}>
               {Array.from({ length: 6 }).map((_, i) => (
                 <View key={i} style={styles.bentoCardSkeleton}>
-                  <SkeletonBlock width={48} height={48} borderRadius={8} />
+                  <SkeletonLoader width={48} height={48} borderRadius={8} />
                   <View style={styles.skeletonTextGroup}>
-                    <SkeletonBlock width="80%" height={13} borderRadius={4} />
-                    <SkeletonBlock width="56%" height={11} borderRadius={4} />
+                    <SkeletonLoader width="80%" height={13} borderRadius={4} />
+                    <SkeletonLoader width="56%" height={11} borderRadius={4} />
                   </View>
                 </View>
               ))}
@@ -472,8 +451,8 @@ export default function HomeScreen({ navigation }: Props) {
               numColumns={2}
               scrollEnabled={false}
               renderItem={({ item }) => (
-                <Pressable
-                  style={({ pressed }) => [styles.bentoCard, pressed && styles.cardPressed]}
+                <PressableCard
+                  style={styles.bentoCard}
                   onPress={() => void handlePlayQuickPick(item)}
                 >
                   <Image
@@ -496,7 +475,7 @@ export default function HomeScreen({ navigation }: Props) {
                       {item.channel_name || 'Unknown'}
                     </Text>
                   </View>
-                </Pressable>
+                </PressableCard>
               )}
             />
           )}
@@ -510,9 +489,9 @@ export default function HomeScreen({ navigation }: Props) {
               <View style={styles.historySkeletonRow}>
                 {[0, 1, 2, 3].map((i) => (
                   <View key={i} style={styles.historyCardSkeleton}>
-                    <SkeletonBlock width={112} height={112} borderRadius={16} />
-                    <SkeletonBlock width={90} height={13} borderRadius={4} />
-                    <SkeletonBlock width={70} height={11} borderRadius={4} />
+                    <SkeletonLoader width={112} height={112} borderRadius={16} />
+                    <SkeletonLoader width={90} height={13} borderRadius={4} />
+                    <SkeletonLoader width={70} height={11} borderRadius={4} />
                   </View>
                 ))}
               </View>
@@ -525,8 +504,8 @@ export default function HomeScreen({ navigation }: Props) {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.historyScroll}
               renderItem={({ item }) => (
-                <Pressable
-                  style={({ pressed }) => [styles.historyCard, pressed && styles.cardPressed]}
+                <PressableCard
+                  style={styles.historyCard}
                   onPress={() => void handlePlayHistory(item)}
                 >
                   <View style={styles.historyThumbWrapper}>
@@ -549,7 +528,7 @@ export default function HomeScreen({ navigation }: Props) {
                   <Text numberOfLines={1} style={styles.historySubtitle}>
                     {item.channel_name || ''}
                   </Text>
-                </Pressable>
+                </PressableCard>
               )}
             />
           )}
@@ -786,9 +765,6 @@ const styles = StyleSheet.create({
   },
 
   // ── Shared ──
-  skeleton: {
-    backgroundColor: '#1E1E1E',
-  },
   cardPressed: {
     opacity: 0.85,
     transform: [{ scale: 0.97 }],

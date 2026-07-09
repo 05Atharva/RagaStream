@@ -22,6 +22,7 @@ import Slider from '@react-native-community/slider';
 import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
 import { Image } from 'expo-image';
 import SleepTimer from '../components/SleepTimer';
+import SkeletonLoader from '../components/SkeletonLoader';
 import EqualizerBars from '../components/EqualizerBars';
 import {
   Gesture,
@@ -738,6 +739,12 @@ export default function NowPlayingScreen() {
             {/* Album art */}
             <View style={styles.artSection}>
               <View style={[styles.artworkWrapper, { width: albumSize, height: albumSize }]}>
+                <SkeletonLoader
+                  width={albumSize}
+                  height={albumSize}
+                  borderRadius={16}
+                  style={{ position: 'absolute', top: 0, left: 0 }}
+                />
                 <Animated.View pointerEvents="none" style={[styles.artGlow, artworkGlowStyle]} />
                 <Animated.View style={[styles.artAnimatedWrapper, artworkRotationStyle]}>
                   <Image

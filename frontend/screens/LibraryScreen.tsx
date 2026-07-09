@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
+import PressableCard from '../components/PressableCard';
 import Animated, { Keyframe, SlideInLeft } from 'react-native-reanimated';
 
 const likedCardIn = new Keyframe({
@@ -22,6 +23,7 @@ const likedCardIn = new Keyframe({
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Swipeable } from 'react-native-gesture-handler';
+import SkeletonLoader from '../components/SkeletonLoader';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { useBottomPadding } from '../hooks/useBottomPadding';
@@ -144,9 +146,9 @@ export default function LibraryScreen({ navigation }: Props) {
 
       {/* ── Liked Songs hero card ── */}
       <Animated.View entering={entering ? likedCardIn.duration(400) : undefined}>
-      <Pressable
+      <PressableCard
         onPress={() => rootNavigation?.navigate('LikedSongs')}
-        style={({ pressed }) => [styles.likedCard, pressed && styles.cardPressed]}
+        style={styles.likedCard}
       >
         <LinearGradient
           colors={['#7C3AED', '#4C1D95']}
@@ -170,7 +172,7 @@ export default function LibraryScreen({ navigation }: Props) {
             <Text style={styles.likedSubtitle}>{likedCount} songs</Text>
           </View>
         </LinearGradient>
-      </Pressable>
+      </PressableCard>
       </Animated.View>
 
       {/* ── Playlists section ── */}
@@ -182,6 +184,19 @@ export default function LibraryScreen({ navigation }: Props) {
         </Pressable>
       </Animated.View>
 
+      {playlistsQuery.isLoading ? (
+        <View style={styles.skeletonList}>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <View key={i} style={styles.playlistSkeletonRow}>
+              <SkeletonLoader width={56} height={56} borderRadius={8} />
+              <View style={styles.skeletonMeta}>
+                <SkeletonLoader width="65%" height={15} borderRadius={4} />
+                <SkeletonLoader width="40%" height={12} borderRadius={4} style={{ marginTop: 6 }} />
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : (
       <FlashList
         data={playlists}
         keyExtractor={(item) => item.id}
@@ -200,9 +215,9 @@ export default function LibraryScreen({ navigation }: Props) {
                 </Pressable>
               )}
             >
-              <Pressable
+              <PressableCard
                 onPress={() => handleOpenPlaylist(item.id)}
-                style={({ pressed }) => [styles.playlistRow, pressed && styles.cardPressed]}
+                style={styles.playlistRow}
               >
                 <View style={styles.playlistThumbWrap}>
                   <Image
@@ -228,11 +243,12 @@ export default function LibraryScreen({ navigation }: Props) {
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.35)" />
-              </Pressable>
+              </PressableCard>
             </Swipeable>
           );
         }}
       />
+      )}
 
       {/* ── Create playlist bottom sheet ── */}
       <AnimatedBottomSheet
@@ -541,6 +557,21 @@ const styles = StyleSheet.create({
   },
   createBtnTextDisabled: {
     color: 'rgba(255,255,255,0.35)',
+  },
+
+  // ── Skeleton ──
+  skeletonList: {
+    paddingTop: 4,
+  },
+  playlistSkeletonRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+    padding: 12,
+  },
+  skeletonMeta: {
+    flex: 1,
   },
 
   // ── Shared ──
