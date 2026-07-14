@@ -53,6 +53,9 @@ Thumbs.db
 *.orig
 *.orig.*
 
+# ── yt-dlp cookie export (personal YouTube session — never commit) ────────────
+backend/cookies.txt
+
 # ── PRD document ──────────────────────────────────────────────────────────────
 prd.txt
 
@@ -61,3 +64,6 @@ frontend/new_screens/
 
 # ── Internal planning docs ────────────────────────────────────────────────────
 implementation_plan.md
+
+# ── One-shot migration scripts (local only) ───────────────────────────────────
+backend/migrate_*.py
