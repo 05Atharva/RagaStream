@@ -143,6 +143,20 @@ async def add_song_to_playlist(
     _get_owned_playlist_or_404(playlist_id, user["user_id"])
     supabase = get_supabase()
 
+    # Check if the song already exists in this playlist
+    existing = (
+        supabase.table("playlist_songs")
+        .select("song_id")
+        .eq("playlist_id", playlist_id)
+        .eq("song_id", body.song_id)
+        .execute()
+    )
+    if existing.data:
+        raise HTTPException(
+            status_code=409,
+            detail="This song is already in the playlist.",
+        )
+
     pos_result = (
         supabase.table("playlist_songs")
         .select("position")
