@@ -8,6 +8,7 @@ import { NativeModules, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
+import AppModal from './components/AppModal';
 import AuthGate from './components/AuthGate';
 import SplashScreen from './screens/SplashScreen';
 import { Colors } from './constants/theme';
@@ -146,6 +147,7 @@ export default function App() {
               )}
             </NavigationContainer>
             <Toast />
+            <AppModal />
           </SafeAreaProvider>
         </BottomSheetModalProvider>
       </GestureHandlerRootView>
