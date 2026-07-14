@@ -32,6 +32,7 @@ import { playTrack } from '../services/audioPlayer';
 import Toast from 'react-native-toast-message';
 import { apiClient } from '../services/apiClient';
 import { queryClient } from '../services/queryClient';
+import { showModal } from '../components/AppModal';
 import { ensureSongInCatalogue } from '../services/songService';
 import { recordPlayHistory } from '../services/historyService';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
@@ -375,8 +376,18 @@ export default function SearchScreen({ route, navigation }: Props) {
       await apiClient.post(`/playlists/${playlist.id}/songs`, { song_id: songId });
       Toast.show({ type: 'success', text1: `Added to ${playlist.name}` });
       setIsPlaylistVisible(false);
-    } catch {
-      Toast.show({ type: 'error', text1: 'Could not add to playlist' });
+    } catch (err: any) {
+      setIsPlaylistVisible(false);
+      if (err?.response?.status === 409) {
+        showModal({
+          title: 'Already Added',
+          message: `This song is already in "${playlist.name}".`,
+          icon: 'information-circle',
+          iconColor: '#F59E0B',
+        });
+      } else {
+        Toast.show({ type: 'error', text1: 'Could not add to playlist' });
+      }
     }
   };
 

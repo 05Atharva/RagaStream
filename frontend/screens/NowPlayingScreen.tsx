@@ -55,6 +55,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { apiClient } from '../services/apiClient';
 import { queryClient } from '../services/queryClient';
+import { showModal } from '../components/AppModal';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import { usePlayerStore, type RepeatModeValue, type Track } from '../store/playerStore';
 
@@ -575,11 +576,21 @@ export default function NowPlayingScreen() {
         type: 'success',
         text1: `Added to ${playlist.name}`,
       });
-    } catch {
-      Toast.show({
-        type: 'error',
-        text1: 'Could not add song to playlist',
-      });
+    } catch (err: any) {
+      setIsPlaylistsVisible(false);
+      if (err?.response?.status === 409) {
+        showModal({
+          title: 'Already Added',
+          message: `This song is already in "${playlist.name}".`,
+          icon: 'information-circle',
+          iconColor: '#F59E0B',
+        });
+      } else {
+        Toast.show({
+          type: 'error',
+          text1: 'Could not add song to playlist',
+        });
+      }
     }
   };
 
