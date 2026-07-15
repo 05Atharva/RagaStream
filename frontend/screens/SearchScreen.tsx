@@ -85,7 +85,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 const MIN_SEARCH_CHARS = 2;
 const CONTENT_PADDING = 20;
 const GENRE_CARD_GAP = 12;
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const GENRE_CARD_SIZE = (SCREEN_WIDTH - CONTENT_PADDING * 2 - GENRE_CARD_GAP) / 2;
 
 type AnimatedGenreCardProps = {
@@ -605,6 +605,7 @@ export default function SearchScreen({ route, navigation }: Props) {
             data={playlists}
             keyExtractor={(item) => item.id}
             renderItem={renderPlaylistItem}
+            style={{ height: SCREEN_HEIGHT * 0.6 }}
             ListEmptyComponent={
               <Text style={styles.sheetEmptyText}>
                 {isLoadingPlaylists ? 'Loading playlists...' : 'No playlists available.'}
@@ -789,7 +790,7 @@ const styles = StyleSheet.create({
   },
 
   // ── Bottom sheets ──
-  sheetContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 4 },
+  sheetContainer: { paddingHorizontal: 20, paddingTop: 4 },
   sheetPickerTitle: {
     color: '#FFFFFF',
     fontSize: 18,

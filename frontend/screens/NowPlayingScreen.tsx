@@ -1003,6 +1003,7 @@ export default function NowPlayingScreen() {
             data={playlists}
             keyExtractor={(item) => item.id}
             renderItem={renderPlaylistItem}
+            style={{ height: height * 0.6 }}
             ListEmptyComponent={
               <Text style={styles.sheetEmptyText}>
                 {isLoadingPlaylists ? 'Loading playlists...' : 'No playlists available.'}
@@ -1025,7 +1026,7 @@ export default function NowPlayingScreen() {
               <Ionicons name="shuffle" size={20} color={shuffle ? '#7C3AED' : 'rgba(255,255,255,0.6)'} />
             </Pressable>
           </View>
-          <View style={styles.queueListContainer}>
+          <View style={[styles.queueListContainer, { height: height * 0.6 }]}>
             <DraggableFlatList
               data={queue}
               keyExtractor={(item) => item.id}
@@ -1318,7 +1319,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(12,15,15,0.97)',
   },
   queueSheetContent: {
-    flex: 1,
     paddingTop: 4,
   },
   queueSheetHeader: {
@@ -1350,9 +1350,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     textTransform: 'uppercase',
   },
-  queueListContainer: {
-    flex: 1,
-  },
+  queueListContainer: {},
   queueListContent: {
     paddingBottom: 40,
     paddingHorizontal: 20,
@@ -1422,7 +1420,6 @@ const styles = StyleSheet.create({
 
   // ── Playlists sheet ──
   sheetContainer: {
-    flex: 1,
     paddingHorizontal: 20,
     paddingTop: 4,
   },

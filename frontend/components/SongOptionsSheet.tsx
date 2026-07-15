@@ -96,7 +96,6 @@ export default function SongOptionsSheet({
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
     paddingBottom: 20,
     paddingHorizontal: 20,
     paddingTop: 4,

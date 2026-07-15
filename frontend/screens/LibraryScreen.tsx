@@ -473,7 +473,6 @@ const styles = StyleSheet.create({
 
   // ── Create playlist sheet ──
   sheetContainer: {
-    flex: 1,
     paddingHorizontal: 20,
     paddingTop: 4,
   },

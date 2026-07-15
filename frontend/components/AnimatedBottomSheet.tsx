@@ -76,6 +76,11 @@ export default function AnimatedBottomSheet({
     translateY.value = withSpring(0, { damping: 25, stiffness: 200 });
   }, [isMounted, backdropOpacity, screenHeight, translateY]);
 
+  // Fixed reference for drag feedback/close-threshold — using the sheet's own
+  // measured height here would make taller sheets (long lists) require a much
+  // bigger drag to dismiss than short ones, which reads as "sticky."
+  const dragReference = screenHeight * 0.35;
+
   // Drag handle only — keeps FlatList / DraggableFlatList scrollable inside.
   const panGesture = Gesture.Pan()
     .activeOffsetY(10)
@@ -83,12 +88,12 @@ export default function AnimatedBottomSheet({
       translateY.value = Math.max(0, event.translationY);
       backdropOpacity.value = Math.max(
         0,
-        0.6 * (1 - event.translationY / sheetHeight.value)
+        0.6 * (1 - event.translationY / dragReference)
       );
     })
     .onEnd((event) => {
       const shouldClose =
-        event.velocityY > 500 || translateY.value > sheetHeight.value * 0.3;
+        event.velocityY > 500 || translateY.value > dragReference;
       if (shouldClose) {
         backdropOpacity.value = withTiming(0, { duration: 250 });
         translateY.value = withTiming(
@@ -135,7 +140,7 @@ export default function AnimatedBottomSheet({
 
         {/* Sheet panel */}
         <Animated.View
-          style={[styles.sheet, { backgroundColor }, sheetStyle]}
+          style={[styles.sheet, { backgroundColor, maxHeight: screenHeight * 0.85 }, sheetStyle]}
           onLayout={(e) => { sheetHeight.value = e.nativeEvent.layout.height; }}
         >
           {/* Draggable handle — gesture only here, not on content */}
