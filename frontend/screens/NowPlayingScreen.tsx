@@ -667,18 +667,7 @@ export default function NowPlayingScreen() {
   };
 
   const handleShuffleToggle = async () => {
-    toggleShuffle();
-    const maybeTrackPlayer = TrackPlayer as typeof TrackPlayer & {
-      setShuffleMode?: (enabled: boolean) => Promise<void>;
-    };
-
-    if (typeof maybeTrackPlayer.setShuffleMode === "function") {
-      try {
-        await maybeTrackPlayer.setShuffleMode(!shuffle);
-      } catch {
-        // Keep local shuffle state even when native shuffle support is unavailable.
-      }
-    }
+    await toggleShuffle();
   };
 
   const cycleRepeatMode = async () => {

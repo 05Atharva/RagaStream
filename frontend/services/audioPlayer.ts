@@ -12,7 +12,7 @@
  * └─────────────────────────────────────────────────────────┘
  */
 import { NativeModules } from 'react-native';
-import type { Track } from '../store/playerStore';
+import { usePlayerStore, type Track } from '../store/playerStore';
 import TrackPlayer, { isTrackPlayerAvailable } from './trackPlayerShim';
 
 // ── expo-av setup (Expo Go only) ──────────────────────────────────────────────
@@ -54,6 +54,38 @@ async function _stopCurrentSound() {
   _isPlaying = false;
 }
 
+// Expo Go (expo-av) has no built-in queue, so track-completion — repeat one,
+// repeat all, and plain auto-advance — has to be driven manually here.
+// react-native-track-player handles all of this natively, so this is a
+// no-op on that path.
+async function _handleTrackFinished(): Promise<void> {
+  const { repeatMode, queue, currentTrack } = usePlayerStore.getState();
+
+  if (repeatMode === 'one') {
+    if (_currentSound) {
+      await _currentSound.setPositionAsync(0).catch(() => {});
+      await _currentSound.playAsync().catch(() => {});
+    }
+    return;
+  }
+
+  const currentIndex = currentTrack ? queue.findIndex((t) => t.id === currentTrack.id) : -1;
+  let nextIndex = currentIndex + 1;
+  if (nextIndex >= queue.length) {
+    if (repeatMode === 'all' && queue.length > 0) {
+      nextIndex = 0;
+    } else {
+      return;
+    }
+  }
+
+  const nextTrack = queue[nextIndex];
+  if (!nextTrack) return;
+
+  usePlayerStore.setState({ currentTrack: nextTrack, isPlaying: true, currentPosition: 0 });
+  await playTrack(nextTrack);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /** Play a track. Uses RNTP in native builds, expo-av in Expo Go. */
@@ -82,6 +114,9 @@ export async function playTrack(track: Track): Promise<void> {
               (status.positionMillis ?? 0) / 1000,
               (status.durationMillis ?? 0) / 1000
             );
+          }
+          if (status.didJustFinish) {
+            void _handleTrackFinished();
           }
         }
       }

@@ -25,6 +25,8 @@ type PlayerStore = {
   queue: Track[];
   repeatMode: RepeatModeValue;
   shuffle: boolean;
+  // Pre-shuffle queue order, kept so toggling shuffle back off can restore it.
+  originalQueue: Track[] | null;
   currentPosition: number;
   duration: number;
   showReconnecting: boolean;
@@ -35,7 +37,7 @@ type PlayerStore = {
   reorderQueue: (queue: Track[]) => Promise<void>;
   removeFromQueue: (trackId: string) => Promise<void>;
   setRepeat: (repeatMode: RepeatModeValue) => Promise<void>;
-  toggleShuffle: () => void;
+  toggleShuffle: () => Promise<void>;
   setPosition: (position: number) => void;
   setDuration: (duration: number) => void;
   setShowReconnecting: (show: boolean) => void;
@@ -113,6 +115,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   queue: [],
   repeatMode: 'off',
   shuffle: false,
+  originalQueue: null,
   currentPosition: 0,
   duration: 0,
   showReconnecting: false,
@@ -249,7 +252,49 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       // Keep local repeat state even if native repeat sync is unavailable.
     }
   },
-  toggleShuffle: () => set((state) => ({ shuffle: !state.shuffle })),
+  // Shuffles the upcoming portion of the queue (current track stays put so
+  // playback doesn't jump), and restores the pre-shuffle order when turned
+  // back off. Also mirrors the reorder into the native queue when available,
+  // since RNTP has no built-in shuffle mode of its own.
+  toggleShuffle: async () => {
+    const { shuffle, queue, currentTrack, originalQueue } = get();
+    const nextShuffle = !shuffle;
+
+    let nextQueue: Track[];
+    if (nextShuffle) {
+      const currentIndex = currentTrack ? queue.findIndex((t) => t.id === currentTrack.id) : -1;
+      const played = currentIndex >= 0 ? queue.slice(0, currentIndex + 1) : [];
+      const upcoming = currentIndex >= 0 ? queue.slice(currentIndex + 1) : [...queue];
+      const shuffledUpcoming = [...upcoming].sort(() => Math.random() - 0.5);
+      nextQueue = [...played, ...shuffledUpcoming];
+    } else {
+      nextQueue = originalQueue ?? queue;
+    }
+
+    set({
+      shuffle: nextShuffle,
+      queue: nextQueue,
+      originalQueue: nextShuffle ? queue : null,
+    });
+
+    const module = loadTrackPlayerModule();
+    if (!module) {
+      return;
+    }
+
+    try {
+      const currentIndex = currentTrack
+        ? nextQueue.findIndex((t) => t.id === currentTrack.id)
+        : -1;
+      const upcoming = currentIndex >= 0 ? nextQueue.slice(currentIndex + 1) : nextQueue;
+      await module.default.removeUpcomingTracks();
+      if (upcoming.length > 0) {
+        await module.default.add(upcoming);
+      }
+    } catch {
+      // Keep local shuffle state even if native queue sync is unavailable.
+    }
+  },
   setPosition: (currentPosition) => set({ currentPosition }),
   setDuration: (duration) => set({ duration }),
   setShowReconnecting: (show) => set({ showReconnecting: show }),
