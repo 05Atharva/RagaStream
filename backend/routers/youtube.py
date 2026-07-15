@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,13 @@ from schemas import YouTubeSearchResult, YouTubeStreamResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Optional: pull cookies from a local browser (e.g. "chrome", "edge", "firefox")
+# to satisfy YouTube's bot-check wall. Set in backend/.env.
+# YTDLP_COOKIES_FILE takes precedence — a Netscape-format cookies.txt export,
+# needed when live browser decryption fails (e.g. Chrome App-Bound Encryption / DPAPI).
+YTDLP_COOKIES_FROM_BROWSER = os.environ.get("YTDLP_COOKIES_FROM_BROWSER")
+YTDLP_COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE")
 
 # ---------------------------------------------------------------------------
 # In-memory stream-URL cache
@@ -35,12 +43,19 @@ _stream_cache: Dict[str, Dict[str, Any]] = {}
 # ---------------------------------------------------------------------------
 
 def _ydl_opts_base() -> dict:
-    return {
+    opts: dict = {
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
         "skip_download": True,
+        # Node.js solves YouTube's signature/nsig challenges (yt-dlp-ejs).
+        "js_runtimes": {"node": {}},
     }
+    if YTDLP_COOKIES_FILE:
+        opts["cookiefile"] = YTDLP_COOKIES_FILE
+    elif YTDLP_COOKIES_FROM_BROWSER:
+        opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
+    return opts
 
 
 def _safe_thumb(thumbnails: Optional[list]) -> str:
@@ -183,7 +198,12 @@ async def get_stream_url(
         data = await asyncio.get_event_loop().run_in_executor(None, _extract)
     except yt_dlp.utils.DownloadError as exc:
         msg = str(exc).lower()
-        if "age" in msg or "sign in" in msg:
+        if "sign in" in msg and "bot" in msg:
+            raise HTTPException(
+                status_code=403,
+                detail="YouTube requires sign-in verification. Configure YTDLP_COOKIES_FROM_BROWSER in backend/.env.",
+            )
+        if "age" in msg:
             raise HTTPException(status_code=451, detail="Video is age-gated.")
         if "geo" in msg or "not available in your country" in msg:
             raise HTTPException(status_code=451, detail="Video is geo-restricted.")
