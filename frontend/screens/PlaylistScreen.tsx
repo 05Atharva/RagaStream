@@ -2,6 +2,9 @@ import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
+  FlatList,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -24,6 +27,9 @@ import { usePlayerStore, type Track } from '../store/playerStore';
 import { recordPlayHistory } from '../services/historyService';
 import { playTrack, isTrackPlayerAvailable } from '../services/audioPlayer';
 import SafeBlurView from '../components/SafeBlurView';
+import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
+import SongOptionsSheet from '../components/SongOptionsSheet';
+import { showModal } from '../components/AppModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Playlist'>;
 
@@ -42,6 +48,13 @@ type PlaylistRecord = {
   description?: string | null;
   songs?: SongRecord[];
 };
+
+type PlaylistSummary = {
+  id: string;
+  name: string;
+};
+
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return '0:00';
@@ -63,6 +76,8 @@ export default function PlaylistScreen({ route, navigation }: Props) {
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [loadingSongId, setLoadingSongId] = useState<string | null>(null);
+  const [optionsSong, setOptionsSong] = useState<SongRecord | null>(null);
+  const [isPlaylistPickerVisible, setIsPlaylistPickerVisible] = useState(false);
   const currentTrack = usePlayerStore((state) => state.currentTrack);
 
   const playlistQuery = useQuery({
@@ -72,6 +87,28 @@ export default function PlaylistScreen({ route, navigation }: Props) {
       return data;
     },
   });
+
+  const likedQuery = useQuery({
+    queryKey: ['liked'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<SongRecord[]>('/liked');
+      return data;
+    },
+  });
+  const likedIds = useMemo(
+    () => new Set((likedQuery.data ?? []).map((song) => song.id)),
+    [likedQuery.data],
+  );
+
+  const otherPlaylistsQuery = useQuery({
+    queryKey: ['playlists'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<PlaylistSummary[]>('/playlists');
+      return data;
+    },
+    enabled: isPlaylistPickerVisible,
+  });
+  const otherPlaylists = (otherPlaylistsQuery.data ?? []).filter((p) => p.id !== playlistId);
 
   const playlist = playlistQuery.data;
   const songs = playlist?.songs ?? [];
@@ -212,6 +249,46 @@ export default function PlaylistScreen({ route, navigation }: Props) {
     );
   };
 
+  const handleToggleLikeForSong = async (song: SongRecord) => {
+    const wasLiked = likedIds.has(song.id);
+    try {
+      if (wasLiked) {
+        await apiClient.delete(`/liked/${song.id}`);
+      } else {
+        await apiClient.post('/liked', { song_id: song.id });
+      }
+      await queryClient.invalidateQueries({ queryKey: ['liked'] });
+    } catch {
+      Toast.show({ type: 'error', text1: 'Could not update liked songs' });
+    }
+  };
+
+  const handleAddOptionsSongToPlaylist = async (target: PlaylistSummary) => {
+    if (!optionsSong) return;
+    try {
+      await apiClient.post(`/playlists/${target.id}/songs`, { song_id: optionsSong.id });
+      setIsPlaylistPickerVisible(false);
+      Toast.show({ type: 'success', text1: `Added to ${target.name}` });
+    } catch (err: any) {
+      setIsPlaylistPickerVisible(false);
+      if (err?.response?.status === 409) {
+        showModal({
+          title: 'Already Added',
+          message: `This song is already in "${target.name}".`,
+          icon: 'information-circle',
+          iconColor: '#F59E0B',
+        });
+      } else {
+        Toast.show({ type: 'error', text1: 'Could not add song to playlist' });
+      }
+    }
+  };
+
+  const handleShareOptionsSong = () => {
+    if (!optionsSong) return;
+    void Linking.openURL(`https://www.youtube.com/watch?v=${optionsSong.youtube_id}`);
+  };
+
   const renderSongItem = ({ item, drag, isActive }: RenderItemParams<SongRecord>) => {
     const isCurrentTrack = currentTrack?.id === item.id;
     const isLoadingThis = loadingSongId === item.id;
@@ -267,7 +344,13 @@ export default function PlaylistScreen({ route, navigation }: Props) {
             <Text style={styles.songDuration}>{formatTime(item.duration_sec ?? 0)}</Text>
           )}
 
-          <Ionicons name="reorder-three-outline" size={20} color="rgba(255,255,255,0.3)" />
+          <Pressable
+            hitSlop={10}
+            onPress={() => setOptionsSong(item)}
+            style={({ pressed }) => [styles.songOptionsBtn, pressed && styles.cardPressed]}
+          >
+            <Ionicons name="ellipsis-vertical" size={18} color="rgba(255,255,255,0.5)" />
+          </Pressable>
         </Pressable>
       </Swipeable>
     );
@@ -357,18 +440,23 @@ export default function PlaylistScreen({ route, navigation }: Props) {
           </View>
         </View>
 
-        <View style={styles.controlsRow}>
-          <Pressable
-            onPress={handleDeletePlaylist}
-            style={({ pressed }) => [styles.controlsIconBtn, pressed && styles.cardPressed]}
-          >
-            <Ionicons name="trash-outline" size={20} color="#ef5350" />
-          </Pressable>
+        <View style={styles.chipsRow}>
           <Pressable
             onPress={() => (navigation as any).navigate('Search')}
-            style={({ pressed }) => [styles.addSongsBtn, pressed && styles.cardPressed]}
+            style={({ pressed }) => [styles.chip, pressed && styles.cardPressed]}
           >
-            <Text style={styles.addSongsBtnText}>Add Songs</Text>
+            <Ionicons name="add" size={15} color="rgba(255,255,255,0.9)" />
+            <Text style={styles.chipText}>Add Songs</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              setNameDraft(playlist?.name ?? '');
+              setIsEditingName(true);
+            }}
+            style={({ pressed }) => [styles.chip, pressed && styles.cardPressed]}
+          >
+            <Ionicons name="create-outline" size={15} color="rgba(255,255,255,0.9)" />
+            <Text style={styles.chipText}>Rename</Text>
           </Pressable>
         </View>
       </>
@@ -411,6 +499,13 @@ export default function PlaylistScreen({ route, navigation }: Props) {
         <Ionicons name="chevron-back" size={22} color="#e2e2e2" />
       </Pressable>
 
+      <Pressable
+        onPress={handleDeletePlaylist}
+        style={({ pressed }) => [styles.overflowButton, pressed && styles.cardPressed]}
+      >
+        <Ionicons name="ellipsis-horizontal" size={20} color="#e2e2e2" />
+      </Pressable>
+
       <DraggableFlatList
         data={songs}
         keyExtractor={(item) => item.id}
@@ -420,6 +515,48 @@ export default function PlaylistScreen({ route, navigation }: Props) {
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={renderEmpty}
       />
+
+      <SongOptionsSheet
+        isVisible={!!optionsSong}
+        onClose={() => setOptionsSong(null)}
+        thumbnail={optionsSong?.thumbnail_url ?? undefined}
+        title={optionsSong?.title ?? ''}
+        channel={optionsSong?.channel_name || 'Unknown channel'}
+        isLiked={optionsSong ? likedIds.has(optionsSong.id) : false}
+        onLike={() => {
+          if (optionsSong) void handleToggleLikeForSong(optionsSong);
+        }}
+        onAddToPlaylist={() => setIsPlaylistPickerVisible(true)}
+        onShare={handleShareOptionsSong}
+      />
+
+      <AnimatedBottomSheet
+        isVisible={isPlaylistPickerVisible}
+        onClose={() => setIsPlaylistPickerVisible(false)}
+      >
+        <View style={styles.pickerContainer}>
+          <Text style={styles.pickerTitle}>Add To Playlist</Text>
+          <FlatList
+            data={otherPlaylists}
+            keyExtractor={(item) => item.id}
+            style={{ height: SCREEN_HEIGHT * 0.6 }}
+            renderItem={({ item }) => (
+              <Pressable
+                onPress={() => void handleAddOptionsSongToPlaylist(item)}
+                style={styles.pickerRow}
+              >
+                <Text style={styles.pickerRowTitle}>{item.name}</Text>
+                <Ionicons name="add-circle-outline" size={22} color="#e2e2e2" />
+              </Pressable>
+            )}
+            ListEmptyComponent={
+              <Text style={styles.pickerEmptyText}>
+                {otherPlaylistsQuery.isLoading ? 'Loading playlists...' : 'No other playlists yet.'}
+              </Text>
+            }
+          />
+        </View>
+      </AnimatedBottomSheet>
     </SafeAreaView>
   );
 }
@@ -445,6 +582,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     left: 16,
     position: 'absolute',
+    top: 8,
+    width: 40,
+    zIndex: 10,
+  },
+  overflowButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(26,28,28,0.75)',
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 40,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 16,
     top: 8,
     width: 40,
     zIndex: 10,
@@ -545,28 +696,27 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
     textAlign: 'center',
   },
-  // ── Controls row ──────────────────────────────────────────────────────────
-  controlsRow: {
-    alignItems: 'center',
+  // ── Quick-action chips row ──────────────────────────────────────────────────
+  chipsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 8,
     marginBottom: 8,
     paddingVertical: 12,
   },
-  controlsIconBtn: {
+  chip: {
     alignItems: 'center',
+    backgroundColor: '#121414',
+    borderColor: 'rgba(255,255,255,0.12)',
     borderRadius: 999,
-    height: 40,
-    justifyContent: 'center',
-    width: 40,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
-  addSongsBtn: {
-    paddingHorizontal: 4,
-    paddingVertical: 4,
-  },
-  addSongsBtnText: {
-    color: '#7C3AED',
-    fontSize: 18,
+  chipText: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
     fontWeight: '600',
   },
   // ── Song list ──────────────────────────────────────────────────────────────
@@ -625,6 +775,11 @@ const styles = StyleSheet.create({
     color: 'rgba(204,195,216,0.6)',
     fontSize: 14,
     fontWeight: '500',
+  },
+  songOptionsBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 4,
   },
   removeButton: {
     alignItems: 'center',
@@ -700,6 +855,37 @@ const styles = StyleSheet.create({
     color: '#ede0ff',
     fontSize: 18,
     fontWeight: '600',
+  },
+  // ── Add-to-playlist picker sheet ─────────────────────────────────────────────
+  pickerContainer: {
+    minHeight: 200,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+  },
+  pickerTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 12,
+  },
+  pickerRow: {
+    alignItems: 'center',
+    borderRadius: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingVertical: 14,
+  },
+  pickerRowTitle: {
+    color: '#e2e2e2',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  pickerEmptyText: {
+    color: 'rgba(204,195,216,0.7)',
+    fontSize: 14,
+    paddingVertical: 20,
+    textAlign: 'center',
   },
   cardPressed: {
     opacity: 0.85,
