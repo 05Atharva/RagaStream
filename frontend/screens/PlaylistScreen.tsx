@@ -22,6 +22,7 @@ import { apiClient } from '../services/apiClient';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import { usePlayerStore, type Track } from '../store/playerStore';
 import { recordPlayHistory } from '../services/historyService';
+import { playTrack, isTrackPlayerAvailable } from '../services/audioPlayer';
 import SafeBlurView from '../components/SafeBlurView';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Playlist'>;
@@ -80,48 +81,67 @@ export default function PlaylistScreen({ route, navigation }: Props) {
   );
   const firstThumb = songs[0]?.thumbnail_url;
 
-  const buildTracks = async (items: SongRecord[]) => {
-    const tracks = await Promise.all(
-      items.map(async (song) => {
-        const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
-          params: { id: song.youtube_id },
-        });
-        return {
-          id: song.id,
-          title: song.title,
-          artist: song.channel_name || 'Unknown channel',
-          album: playlist?.name ?? 'Playlist',
-          artwork: song.thumbnail_url || '',
-          url: data.stream_url,
-          source: 'youtube',
-          youtubeId: song.youtube_id,
-          channelName: song.channel_name || undefined,
-          thumbnailUrl: song.thumbnail_url || undefined,
-        } as Track;
-      })
-    );
-    return tracks;
+  const buildTrack = async (song: SongRecord) => {
+    const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
+      params: { id: song.youtube_id },
+    });
+    return {
+      id: song.id,
+      title: song.title,
+      artist: song.channel_name || 'Unknown channel',
+      album: playlist?.name ?? 'Playlist',
+      artwork: song.thumbnail_url || '',
+      url: data.stream_url,
+      source: 'youtube',
+      youtubeId: song.youtube_id,
+      channelName: song.channel_name || undefined,
+      thumbnailUrl: song.thumbnail_url || undefined,
+    } as Track;
   };
 
-  const playTracks = async (items: SongRecord[]) => {
-    if (items.length === 0) return;
+  // Plays `first` immediately (single stream fetch) so tapping a song never
+  // blocks on resolving stream URLs for the rest of the playlist. The
+  // remainder is fetched one at a time afterwards, on a delay, so it never
+  // competes with the just-started track for bandwidth on a slow/shared
+  // connection (e.g. a mobile hotspot) during its critical initial buffer.
+  const playTracks = async (first: SongRecord, rest: SongRecord[]) => {
     try {
-      const tracks = await buildTracks(items);
-      await TrackPlayer.reset();
-      await TrackPlayer.add(tracks);
-      await TrackPlayer.play();
-      usePlayerStore.setState({ currentTrack: tracks[0], queue: tracks, isPlaying: true });
-      void recordPlayHistory(tracks[0].id);
+      const firstTrack = await buildTrack(first);
+      await playTrack(firstTrack);
+      usePlayerStore.setState({ currentTrack: firstTrack, queue: [firstTrack], isPlaying: true });
+      void recordPlayHistory(firstTrack.id);
       navigation.navigate('NowPlaying');
     } catch {
       Toast.show({ type: 'error', text1: 'Could not start playlist' });
+      return;
+    }
+
+    if (rest.length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    for (const song of rest) {
+      try {
+        const track = await buildTrack(song);
+        // Native queue (skip next/previous) only exists in a real build —
+        // the expo-av fallback used in Expo Go plays one track at a time.
+        if (isTrackPlayerAvailable) {
+          await TrackPlayer.add(track);
+        }
+        usePlayerStore.setState((state) => ({ queue: [...state.queue, track] }));
+      } catch {
+        // Skip songs that fail to resolve; the rest of the queue still fills in.
+      }
     }
   };
 
-  const handlePlayAll = async () => { await playTracks(songs); };
+  const handlePlayAll = async () => {
+    if (songs.length === 0) return;
+    await playTracks(songs[0], songs.slice(1));
+  };
 
   const handleShuffle = async () => {
-    await playTracks([...songs].sort(() => Math.random() - 0.5));
+    if (songs.length === 0) return;
+    const [first, ...rest] = [...songs].sort(() => Math.random() - 0.5);
+    await playTracks(first, rest);
   };
 
   const handleRename = async () => {
@@ -164,7 +184,7 @@ export default function PlaylistScreen({ route, navigation }: Props) {
 
   const handleSongPress = async (song: SongRecord) => {
     setLoadingSongId(song.id);
-    await playTracks([song, ...songs.filter((item) => item.id !== song.id)]);
+    await playTracks(song, songs.filter((item) => item.id !== song.id));
     setLoadingSongId(null);
   };
 
