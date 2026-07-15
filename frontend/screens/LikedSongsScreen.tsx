@@ -18,6 +18,7 @@ import { apiClient } from '../services/apiClient';
 import { BorderRadius, Colors, Spacing, Typography } from '../constants/theme';
 import { usePlayerStore, type Track } from '../store/playerStore';
 import { recordPlayHistory } from '../services/historyService';
+import { playTrack, isTrackPlayerAvailable } from '../services/audioPlayer';
 
 type SongRecord = {
   id: string;
@@ -53,48 +54,65 @@ export default function LikedSongsScreen() {
 
   const likedSongs = likedQuery.data ?? [];
 
-  const buildTracks = async (songs: SongRecord[]) => {
-    const tracks = await Promise.all(
-      songs.map(async (song) => {
-        const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
-          params: { id: song.youtube_id },
-        });
-        return {
-          id: song.id,
-          title: song.title,
-          artist: song.channel_name || 'Unknown channel',
-          album: 'Liked Songs',
-          artwork: song.thumbnail_url || '',
-          url: data.stream_url,
-          source: 'youtube',
-          youtubeId: song.youtube_id,
-          channelName: song.channel_name || undefined,
-          thumbnailUrl: song.thumbnail_url || undefined,
-        } as Track;
-      })
-    );
-    return tracks;
+  const buildTrack = async (song: SongRecord) => {
+    const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
+      params: { id: song.youtube_id },
+    });
+    return {
+      id: song.id,
+      title: song.title,
+      artist: song.channel_name || 'Unknown channel',
+      album: 'Liked Songs',
+      artwork: song.thumbnail_url || '',
+      url: data.stream_url,
+      source: 'youtube',
+      youtubeId: song.youtube_id,
+      channelName: song.channel_name || undefined,
+      thumbnailUrl: song.thumbnail_url || undefined,
+    } as Track;
   };
 
+  // Plays the first track immediately (single stream fetch) and queues the
+  // rest one at a time afterwards, on a delay, so it never competes with the
+  // just-started track for bandwidth on a slow/shared connection (e.g. a
+  // mobile hotspot) during its critical initial buffer.
   const playTracks = async (songs: SongRecord[], startIndex = 0) => {
-    try {
-      const tracks = await buildTracks(songs);
-      const reordered = startIndex === 0 ? tracks : [...tracks.slice(startIndex), ...tracks.slice(0, startIndex)];
+    const reorderedSongs =
+      startIndex === 0 ? songs : [...songs.slice(startIndex), ...songs.slice(0, startIndex)];
+    const [first, ...rest] = reorderedSongs;
+    if (!first) return;
 
-      await TrackPlayer.reset();
-      await TrackPlayer.add(reordered);
-      await TrackPlayer.play();
+    try {
+      const firstTrack = await buildTrack(first);
+      await playTrack(firstTrack);
 
       usePlayerStore.setState({
-        currentTrack: reordered[0],
-        queue: reordered,
+        currentTrack: firstTrack,
+        queue: [firstTrack],
         isPlaying: true,
       });
 
       // M1: Record play history for the first track
-      void recordPlayHistory(reordered[0].id);
+      void recordPlayHistory(firstTrack.id);
     } catch {
       Toast.show({ type: 'error', text1: 'Could not start playback' });
+      return;
+    }
+
+    if (rest.length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    for (const song of rest) {
+      try {
+        const track = await buildTrack(song);
+        // Native queue (skip next/previous) only exists in a real build —
+        // the expo-av fallback used in Expo Go plays one track at a time.
+        if (isTrackPlayerAvailable) {
+          await TrackPlayer.add(track);
+        }
+        usePlayerStore.setState((state) => ({ queue: [...state.queue, track] }));
+      } catch {
+        // Skip songs that fail to resolve; the rest of the queue still fills in.
+      }
     }
   };
 
