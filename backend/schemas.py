@@ -41,6 +41,7 @@ class SongResponse(BaseModel):
     language: Optional[str] = None
     genre: Optional[str] = None
     play_count: int = 0
+    added_at: Optional[str] = None   # when it was added to the playlist / liked
 
 
 class SongCreateRequest(BaseModel):
@@ -68,6 +69,10 @@ class PlaylistResponse(BaseModel):
     description: Optional[str] = None
     user_id: str
     songs: Optional[List[SongResponse]] = None
+    song_count: Optional[int] = None
+    cover_thumbnails: Optional[List[str]] = None   # first 4 song thumbnails, for mosaics
+    updated_at: Optional[str] = None
+    created_at: Optional[str] = None
 
 
 class PlaylistCreateRequest(BaseModel):
@@ -88,6 +93,15 @@ class ReorderPlaylistSongsRequest(BaseModel):
     song_ids: List[str]
 
 
+class BulkAddSongsRequest(BaseModel):
+    song_ids: List[str]
+
+
+class BulkAddSongsResponse(BaseModel):
+    added: int
+    skipped: int
+
+
 # ---------------------------------------------------------------------------
 # Liked Songs
 # ---------------------------------------------------------------------------
@@ -102,6 +116,47 @@ class LikeRequest(BaseModel):
 
 class HistoryRequest(BaseModel):
     song_id: str
+
+
+class TopSongResponse(SongResponse):
+    plays: int
+
+
+class TopChannelResponse(BaseModel):
+    channel_name: str
+    plays: int
+    thumbnail_url: Optional[str] = None
+    top_song: SongResponse
+
+
+class ListeningStatsResponse(BaseModel):
+    total_plays: int
+    top_songs: List[TopSongResponse]
+    top_channels: List[TopChannelResponse]
+
+
+# ---------------------------------------------------------------------------
+# Media (lyrics, artwork colour)
+# ---------------------------------------------------------------------------
+
+class LyricLine(BaseModel):
+    time: float     # seconds
+    text: str
+
+
+class LyricsResponse(BaseModel):
+    synced: bool
+    lines: List[LyricLine]
+    plain: Optional[str] = None
+    track_name: str
+    artist_name: str
+    source: str
+
+
+class ArtworkColorResponse(BaseModel):
+    accent: str        # vivid, for highlights
+    background: str    # dark tint, for gradients behind content
+    muted: str         # near-black tint, for mini player / deep surfaces
 
 
 # ---------------------------------------------------------------------------

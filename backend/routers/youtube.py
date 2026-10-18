@@ -85,6 +85,8 @@ async def cache_cleanup_loop() -> None:
         expired = [k for k, v in _stream_cache.items() if v["expires_at"] < now]
         for key in expired:
             _stream_cache.pop(key, None)
+        for key in [k for k, v in _radio_cache.items() if v["expires_at"] < now]:
+            _radio_cache.pop(key, None)
         if expired:
             logger.info("YouTube cache: evicted %d expired entries.", len(expired))
 
@@ -141,6 +143,66 @@ async def search_youtube(
     except Exception as exc:
         logger.exception("Unexpected search error: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error during search.")
+
+
+RADIO_CACHE_TTL_SECONDS = 60 * 60   # 1 hour — mixes change slowly
+_radio_cache: Dict[str, Dict[str, Any]] = {}
+
+
+@router.get("/radio", response_model=List[YouTubeSearchResult])
+async def get_radio(
+    id: str = Query(..., min_length=1, description="Seed YouTube video ID"),
+    limit: int = Query(25, ge=1, le=50, description="Max tracks (1-50)"),
+):
+    """
+    Song radio: tracks related to a seed video, taken from YouTube's
+    auto-generated "Mix" playlist (list=RD<id>). The seed itself is excluded.
+    Powers Start radio, Autoplay and Smart Shuffle recommendations.
+    """
+    now = time.time()
+    cached = _radio_cache.get(id)
+    if cached and cached["expires_at"] > now:
+        return cached["data"][:limit]
+
+    ydl_opts = {
+        **_ydl_opts_base(),
+        "extract_flat": "in_playlist",
+        "playlistend": 50,
+    }
+
+    def _run_radio() -> list:
+        url = f"https://www.youtube.com/watch?v={id}&list=RD{id}"
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            entries = info.get("entries", []) if info else []
+            results = []
+            seen = {id}
+            for entry in entries:
+                if not entry or not entry.get("id") or entry["id"] in seen:
+                    continue
+                seen.add(entry["id"])
+                results.append(
+                    YouTubeSearchResult(
+                        youtube_id=entry["id"],
+                        title=entry.get("title", "Unknown"),
+                        channel=entry.get("channel", entry.get("uploader", "Unknown")),
+                        duration=_duration_int(entry.get("duration")),
+                        thumbnail=f"https://i.ytimg.com/vi/{entry['id']}/hqdefault.jpg",
+                    )
+                )
+            return results
+
+    try:
+        results = await asyncio.get_event_loop().run_in_executor(None, _run_radio)
+    except yt_dlp.utils.DownloadError as exc:
+        logger.error("yt-dlp radio error for %s: %s", id, exc)
+        raise HTTPException(status_code=502, detail="Could not build radio for this song.")
+    except Exception as exc:
+        logger.exception("Unexpected radio error for %s: %s", id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
+    _radio_cache[id] = {"data": results, "expires_at": now + RADIO_CACHE_TTL_SECONDS}
+    return results[:limit]
 
 
 @router.get("/stream", response_model=YouTubeStreamResponse)
@@ -201,7 +263,7 @@ async def get_stream_url(
         if "sign in" in msg and "bot" in msg:
             raise HTTPException(
                 status_code=403,
-                detail="YouTube requires sign-in verification. Configure YTDLP_COOKIES_FROM_BROWSER in backend/.env.",
+                detail="YouTube requires sign-in verification. Configure YTDLP_COOKIES_FILE in backend/.env.",
             )
         if "age" in msg:
             raise HTTPException(status_code=451, detail="Video is age-gated.")

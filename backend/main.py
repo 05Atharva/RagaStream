@@ -8,7 +8,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import admin, history, liked, playlists, search, songs, youtube
+from routers import admin, history, liked, media, playlists, search, songs, youtube
 from db import get_supabase
 
 logging.basicConfig(level=logging.INFO)
@@ -74,6 +74,7 @@ app.include_router(liked.router,     prefix="/liked",     tags=["Liked"])
 app.include_router(history.router,   prefix="/history",   tags=["History"])
 app.include_router(search.router,    prefix="/search",    tags=["Search"])
 app.include_router(admin.router,     prefix="/admin",     tags=["Admin"])
+app.include_router(media.router,                          tags=["Media"])
 
 
 @app.get("/health", tags=["Health"])
