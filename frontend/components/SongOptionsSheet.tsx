@@ -1,21 +1,28 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import AnimatedBottomSheet from './AnimatedBottomSheet';
 import LikeButton from './LikeButton';
+import { Colors, TypeScale } from '../constants/theme';
+
+export type SongAction = {
+  key: string;
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  onPress: () => void;
+  destructive?: boolean;
+};
 
 type SongOptionsSheetProps = {
   isVisible: boolean;
   onClose: () => void;
-  thumbnail?: string;
+  thumbnail?: string | null;
   title: string;
   channel: string;
-  isLiked?: boolean;
-  onLike: () => void | Promise<void>;
-  onAddToPlaylist: () => void | Promise<void>;
-  onAddToQueue?: () => void | Promise<void>;
-  onShare: () => void;
+  isLiked: boolean;
+  onToggleLike: () => void;
+  actions: SongAction[];
 };
 
 export default function SongOptionsSheet({
@@ -24,12 +31,12 @@ export default function SongOptionsSheet({
   thumbnail,
   title,
   channel,
-  isLiked = false,
-  onLike,
-  onAddToPlaylist,
-  onAddToQueue,
-  onShare,
+  isLiked,
+  onToggleLike,
+  actions,
 }: SongOptionsSheetProps) {
+  const { height } = useWindowDimensions();
+
   return (
     <AnimatedBottomSheet isVisible={isVisible} onClose={onClose}>
       <View style={styles.container}>
@@ -37,13 +44,9 @@ export default function SongOptionsSheet({
         <View style={styles.songInfo}>
           <View style={styles.thumbWrap}>
             {thumbnail ? (
-              <Image
-                source={{ uri: thumbnail }}
-                style={StyleSheet.absoluteFillObject}
-                contentFit="cover"
-              />
+              <Image source={{ uri: thumbnail }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
             ) : (
-              <Ionicons name="musical-notes" size={24} color="rgba(255,255,255,0.3)" />
+              <Ionicons name="musical-notes" size={22} color="rgba(255,255,255,0.3)" />
             )}
           </View>
           <View style={styles.songMeta}>
@@ -54,41 +57,34 @@ export default function SongOptionsSheet({
 
         <View style={styles.separator} />
 
-        <Pressable
-          style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-          onPress={() => void onLike()}
-        >
-          <View style={styles.likeButtonWrap}>
-            <LikeButton isLiked={isLiked} onToggle={() => void onLike()} size={24} />
-          </View>
-          <Text style={styles.actionText}>{isLiked ? 'Liked' : 'Like'}</Text>
-        </Pressable>
-
-        <Pressable
-          style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-          onPress={() => void onAddToPlaylist()}
-        >
-          <Ionicons name="musical-notes-outline" size={24} color="rgba(255,255,255,0.85)" />
-          <Text style={styles.actionText}>Add to Playlist</Text>
-        </Pressable>
-
-        {onAddToQueue && (
+        <ScrollView style={{ maxHeight: height * 0.6 }} bounces={false} showsVerticalScrollIndicator={false}>
           <Pressable
             style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-            onPress={() => void onAddToQueue()}
+            onPress={onToggleLike}
           >
-            <Ionicons name="add-outline" size={24} color="rgba(255,255,255,0.85)" />
-            <Text style={styles.actionText}>Add to Queue</Text>
+            <View style={styles.likeButtonWrap}>
+              <LikeButton isLiked={isLiked} onToggle={onToggleLike} size={22} />
+            </View>
+            <Text style={styles.actionText}>{isLiked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}</Text>
           </Pressable>
-        )}
 
-        <Pressable
-          style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-          onPress={onShare}
-        >
-          <Ionicons name="share-social-outline" size={24} color="rgba(255,255,255,0.85)" />
-          <Text style={styles.actionText}>Share YouTube link</Text>
-        </Pressable>
+          {actions.map((action) => (
+            <Pressable
+              key={action.key}
+              style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
+              onPress={action.onPress}
+            >
+              <Ionicons
+                name={action.icon}
+                size={22}
+                color={action.destructive ? Colors.error : 'rgba(255,255,255,0.85)'}
+              />
+              <Text style={[styles.actionText, action.destructive && styles.actionTextDestructive]}>
+                {action.label}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
       </View>
     </AnimatedBottomSheet>
   );
@@ -96,63 +92,64 @@ export default function SongOptionsSheet({
 
 const styles = StyleSheet.create({
   container: {
-    paddingBottom: 20,
-    paddingHorizontal: 20,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
     paddingTop: 4,
   },
   songInfo: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 14,
-    marginBottom: 16,
+    gap: 12,
+    marginBottom: 12,
   },
   thumbWrap: {
     alignItems: 'center',
-    backgroundColor: '#333535',
-    borderRadius: 10,
+    backgroundColor: '#262828',
+    borderRadius: 8,
     flexShrink: 0,
-    height: 64,
+    height: 52,
     justifyContent: 'center',
     overflow: 'hidden',
-    width: 64,
+    width: 52,
   },
   songMeta: {
     flex: 1,
     minWidth: 0,
   },
   songTitle: {
-    color: '#e2e2e2',
-    fontSize: 18,
+    color: Colors.onBackground,
+    fontSize: TypeScale.body,
     fontWeight: '600',
   },
   songChannel: {
-    color: 'rgba(204,195,216,0.85)',
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 4,
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+    marginTop: 2,
   },
   separator: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: Colors.border,
     height: StyleSheet.hairlineWidth,
-    marginBottom: 8,
+    marginBottom: 4,
   },
   action: {
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: 8,
     flexDirection: 'row',
     gap: 16,
     paddingHorizontal: 4,
-    paddingVertical: 14,
+    paddingVertical: 13,
   },
   actionPressed: {
     backgroundColor: 'rgba(255,255,255,0.05)',
   },
   likeButtonWrap: {
-    marginHorizontal: -8,
+    marginHorizontal: -9,
   },
   actionText: {
-    color: '#e2e2e2',
-    fontSize: 16,
-    fontWeight: '500',
+    color: Colors.onBackground,
+    fontSize: TypeScale.body,
+  },
+  actionTextDestructive: {
+    color: Colors.error,
   },
 });

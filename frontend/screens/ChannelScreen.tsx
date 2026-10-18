@@ -1,94 +1,68 @@
-import React, { useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
-import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import Toast from 'react-native-toast-message';
+import SongRow from '../components/SongRow';
+import {
+  CollapsingTopBar,
+  PlayButtonSlot,
+  StickyPlayButton,
+  useCollapsingHeader,
+} from '../components/CollapsingHeader';
 import { apiClient } from '../services/apiClient';
-import { playTrack } from '../services/audioPlayer';
-import { ensureSongInCatalogue } from '../services/songService';
-import { recordPlayHistory } from '../services/historyService';
+import * as playback from '../services/playbackController';
+import { tapHaptic } from '../services/haptics';
+import { useArtworkColor } from '../hooks/useArtworkColor';
+import { usePlayerStore } from '../store/playerStore';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import { usePlayerStore, type Track } from '../store/playerStore';
+import { Colors, TypeScale } from '../constants/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Channel'>;
 
-type YouTubeSearchResult = {
-  youtube_id: string;
-  title: string;
-  channel: string;
-  duration: number;
-  thumbnail: string;
-};
-
-function formatTime(value: number) {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '0:00';
-  }
-  const totalSeconds = Math.floor(value);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
 export default function ChannelScreen({ route, navigation }: Props) {
   const { channelName } = route.params;
+  const insets = useSafeAreaInsets();
+  const { scrollY, onScroll } = useCollapsingHeader();
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [anchorY, setAnchorY] = useState(0);
+  const [isStartingRadio, setIsStartingRadio] = useState(false);
 
-  const { data: results, isLoading } = useQuery({
+  const context = usePlayerStore((s) => s.context);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const shuffleMode = usePlayerStore((s) => s.shuffleMode);
+  const isThisContext = context?.type === 'channel' && context.id === channelName;
+
+  const { data, isLoading } = useQuery({
     queryKey: ['channel-songs', channelName],
     queryFn: async () => {
-      const { data } = await apiClient.get<YouTubeSearchResult[]>('/youtube/search', {
+      const { data: results } = await apiClient.get<playback.YouTubeResult[]>('/youtube/search', {
         params: { q: channelName, limit: 20 },
       });
-      return data;
+      return results;
     },
   });
 
-  const handlePlay = async (item: YouTubeSearchResult) => {
-    if (loadingId) return;
-    setLoadingId(item.youtube_id);
+  // Uploads from this exact channel first; other matches for the name after.
+  const songs = useMemo(() => {
+    const all = (data ?? []).map(playback.fromYouTube);
+    const own = all.filter((s) => s.channel_name === channelName);
+    return [...own, ...all.filter((s) => s.channel_name !== channelName)];
+  }, [data, channelName]);
 
+  const palette = useArtworkColor(songs[0]?.thumbnail_url);
+  const channelContext = { type: 'channel' as const, name: channelName, id: channelName };
+
+  const play = async (index: number, shuffle?: boolean) => {
+    const song = songs[index];
+    if (!song) return;
+    if (!shuffle) setLoadingId(song.youtube_id);
     try {
-      const cataloguePromise = ensureSongInCatalogue({
-        youtube_id: item.youtube_id,
-        title: item.title,
-        channel_name: item.channel,
-        thumbnail_url: item.thumbnail,
-        duration_sec: item.duration,
-      }).catch(() => item.youtube_id);
-
-      const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
-        params: { id: item.youtube_id },
-      });
-
-      const songId = await cataloguePromise;
-
-      const track: Track = {
-        id: songId,
-        title: item.title,
-        artist: item.channel,
-        album: channelName,
-        artwork: item.thumbnail,
-        url: data.stream_url,
-        source: 'youtube',
-        youtubeId: item.youtube_id,
-        channelName: item.channel,
-        thumbnailUrl: item.thumbnail,
-      };
-
-      await playTrack(track);
-      usePlayerStore.setState({ currentTrack: track, queue: [track], isPlaying: true });
-      void recordPlayHistory(songId);
+      await playback.playSongs(songs, index, channelContext, { shuffle, thumbnail: song.thumbnail_url });
       navigation.navigate('NowPlaying');
     } catch {
       Toast.show({ type: 'error', text1: 'Could not play this track' });
@@ -97,196 +71,180 @@ export default function ChannelScreen({ route, navigation }: Props) {
     }
   };
 
-  const listHeader = (
-    <View style={styles.artistHeader}>
-      <View style={styles.artistAvatar}>
-        <Ionicons name="person" size={48} color="rgba(210,187,255,0.55)" />
+  const handleRadio = async () => {
+    if (!songs[0] || isStartingRadio) return;
+    setIsStartingRadio(true);
+    try {
+      await playback.startRadio(songs[0]);
+      navigation.navigate('NowPlaying');
+    } catch {
+      Toast.show({ type: 'error', text1: 'Could not start radio' });
+    } finally {
+      setIsStartingRadio(false);
+    }
+  };
+
+  const toggleShuffle = () => {
+    tapHaptic();
+    if (isThisContext) void playback.cycleShuffle();
+    else usePlayerStore.setState({ shuffleMode: shuffleMode === 'off' ? 'shuffle' : 'off' });
+  };
+
+  const header = (
+    <View>
+      <LinearGradient colors={[palette.background, '#000000']} style={[styles.hero, { paddingTop: insets.top + 56 }]}>
+        <View style={[styles.avatar, { backgroundColor: palette.accent }]}>
+          <Text style={styles.avatarText}>{channelName.charAt(0).toUpperCase()}</Text>
+        </View>
+        <Text numberOfLines={2} style={styles.channelTitle}>{channelName}</Text>
+        <Text style={styles.channelMeta}>{isLoading ? 'Loading…' : `${songs.length} tracks`}</Text>
+      </LinearGradient>
+
+      <View style={styles.actionsRow} onLayout={(e) => setAnchorY(e.nativeEvent.layout.y)}>
+        <Pressable onPress={() => void handleRadio()} style={styles.radioButton} disabled={!songs.length}>
+          {isStartingRadio ? (
+            <ActivityIndicator color="#FFFFFF" size="small" />
+          ) : (
+            <Ionicons name="radio-outline" size={16} color="#FFFFFF" />
+          )}
+          <Text style={styles.radioText}>Channel radio</Text>
+        </Pressable>
+        <View style={styles.flex} />
+        <Pressable onPress={toggleShuffle} style={styles.actionIcon} hitSlop={6} accessibilityLabel="Shuffle">
+          <Ionicons name="shuffle" size={26} color={shuffleMode === 'off' ? Colors.textSubdued : Colors.secondary} />
+        </Pressable>
+        <PlayButtonSlot />
       </View>
-      <Text style={styles.channelTitle} numberOfLines={2}>
-        {channelName}
-      </Text>
-      <Text style={styles.channelSubtitle}>
-        {results?.length ?? 0} tracks found
-      </Text>
-      <Text style={styles.tracksLabel}>Popular Tracks</Text>
+
+      <Text style={styles.sectionTitle}>Popular</Text>
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.backRow}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Ionicons name="chevron-back" size={22} color="rgba(255,255,255,0.9)" />
-        </Pressable>
-      </View>
+    <View style={styles.container}>
+      <FlashList
+        data={songs}
+        keyExtractor={(item) => item.youtube_id}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        ListHeaderComponent={header}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
+        renderItem={({ item, index }) => (
+          <SongRow
+            song={item}
+            index={index + 1}
+            isLoading={loadingId === item.youtube_id}
+            onPress={() => void play(index)}
+            menuOptions={{ hideGoToChannel: item.channel_name === channelName }}
+          />
+        )}
+        ListEmptyComponent={
+          isLoading ? (
+            <ActivityIndicator color={Colors.primary} style={styles.loader} />
+          ) : (
+            <Text style={styles.emptyText}>No songs found for this channel.</Text>
+          )
+        }
+      />
 
-      {isLoading ? (
-        <View style={styles.loadingState}>
-          <ActivityIndicator color="#7C3AED" size="large" />
-        </View>
-      ) : (
-        <FlashList
-          data={results ?? []}
-          keyExtractor={(item) => item.youtube_id}
-          contentContainerStyle={styles.list}
-          ListHeaderComponent={listHeader}
-          renderItem={({ item }) => {
-            const isActive = loadingId === item.youtube_id;
-            return (
-              <Pressable
-                style={({ pressed }) => [styles.songRow, pressed && styles.cardPressed]}
-                onPress={() => void handlePlay(item)}
-              >
-                <View style={styles.songThumbWrap}>
-                  <Image
-                    source={{ uri: item.thumbnail }}
-                    style={StyleSheet.absoluteFillObject}
-                    contentFit="cover"
-                  />
-                  {isActive && (
-                    <View style={styles.thumbOverlay}>
-                      <ActivityIndicator color="#7C3AED" size="small" />
-                    </View>
-                  )}
-                </View>
-                <View style={styles.songMeta}>
-                  <Text numberOfLines={1} style={styles.songTitle}>{item.title}</Text>
-                  <Text numberOfLines={1} style={styles.songSubtitle}>{item.channel}</Text>
-                </View>
-                <Text style={styles.songDuration}>{formatTime(item.duration)}</Text>
-              </Pressable>
-            );
-          }}
-          ListEmptyComponent={
-            <Text style={styles.emptyText}>No songs found for this artist.</Text>
-          }
+      <CollapsingTopBar
+        scrollY={scrollY}
+        title={channelName}
+        background={palette.muted}
+        threshold={insets.top + 200}
+        onBack={() => navigation.goBack()}
+      />
+      {songs.length > 0 ? (
+        <StickyPlayButton
+          scrollY={scrollY}
+          anchorY={anchorY}
+          isPlaying={isThisContext && isPlaying}
+          onPress={() => (isThisContext ? void playback.togglePlay() : void play(0, shuffleMode !== 'off'))}
         />
-      )}
-    </SafeAreaView>
+      ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#000000',
+    backgroundColor: Colors.background,
     flex: 1,
   },
-  backRow: {
-    paddingBottom: 4,
-    paddingHorizontal: 12,
-    paddingTop: 4,
+  flex: {
+    flex: 1,
   },
-  backButton: {
+  hero: {
+    alignItems: 'center',
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+  },
+  avatar: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 140,
+    justifyContent: 'center',
+    marginBottom: 16,
+    width: 140,
+  },
+  avatarText: {
+    color: '#FFFFFF',
+    fontSize: 56,
+    fontWeight: '700',
+  },
+  channelTitle: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.display,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  channelMeta: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+    marginTop: 6,
+  },
+  actionsRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    height: 56,
+    marginVertical: 8,
+    paddingHorizontal: 16,
+  },
+  radioButton: {
+    alignItems: 'center',
+    borderColor: 'rgba(255,255,255,0.35)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  radioText: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.small,
+    fontWeight: '600',
+  },
+  actionIcon: {
     alignItems: 'center',
     height: 40,
     justifyContent: 'center',
-    width: 40,
+    width: 36,
   },
-  loadingState: {
-    alignItems: 'center',
-    flex: 1,
-    justifyContent: 'center',
-  },
-  list: {
-    paddingBottom: 120,
-    paddingHorizontal: 20,
-  },
-
-  // ── Artist header (ListHeaderComponent) ──
-  artistHeader: {
-    alignItems: 'center',
-    paddingBottom: 24,
-    paddingTop: 8,
-  },
-  artistAvatar: {
-    alignItems: 'center',
-    backgroundColor: '#1a1c1c',
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 999,
-    borderWidth: 2,
-    elevation: 12,
-    height: 120,
-    justifyContent: 'center',
-    marginBottom: 16,
-    shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
-    width: 120,
-  },
-  channelTitle: {
-    color: '#e2e2e2',
-    fontSize: 24,
+  sectionTitle: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.title,
     fontWeight: '700',
-    marginBottom: 6,
-    textAlign: 'center',
-  },
-  channelSubtitle: {
-    color: 'rgba(204,195,216,0.75)',
-    fontSize: 14,
-    fontWeight: '500',
-    marginBottom: 24,
-  },
-  tracksLabel: {
-    alignSelf: 'flex-start',
-    color: '#e2e2e2',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-
-  // ── Song rows ──
-  songRow: {
-    alignItems: 'center',
-    borderRadius: 8,
-    flexDirection: 'row',
-    gap: 12,
     marginBottom: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
   },
-  cardPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.97 }],
-  },
-  songThumbWrap: {
-    backgroundColor: '#333535',
-    borderRadius: 8,
-    flexShrink: 0,
-    height: 56,
-    overflow: 'hidden',
-    width: 56,
-  },
-  thumbOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-  },
-  songMeta: {
-    flex: 1,
-    minWidth: 0,
-  },
-  songTitle: {
-    color: '#e2e2e2',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  songSubtitle: {
-    color: 'rgba(204,195,216,0.75)',
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  songDuration: {
-    color: 'rgba(204,195,216,0.65)',
-    fontSize: 14,
-    fontWeight: '500',
+  loader: {
+    marginTop: 48,
   },
   emptyText: {
-    color: 'rgba(204,195,216,0.5)',
-    fontSize: 15,
-    marginTop: 24,
+    color: Colors.textMuted,
+    paddingVertical: 32,
     textAlign: 'center',
   },
 });

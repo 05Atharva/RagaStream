@@ -60,6 +60,7 @@ const stubPlayer = {
   seekTo:             noop,
   setQueue:           noop,
   setRepeatMode:      noop,
+  setRate:            noop,
   getProgress:        async () => ({ position: 0, duration: 0, buffered: 0 }),
   getPlaybackState:   async () => ({ state: 'none' }),
   getActiveTrack:     async () => null,

@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  FlatList,
-  Linking,
+  ActivityIndicator,
   Pressable,
+  ScrollView,
   StyleProp,
   StyleSheet,
   Text,
@@ -10,100 +10,65 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import SafeBlurView from '../components/SafeBlurView';
-import SongOptionsSheet from '../components/SongOptionsSheet';
-import LikeButton from '../components/LikeButton';
-import Slider from '@react-native-community/slider';
-import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
 import { Image } from 'expo-image';
-import SleepTimer from '../components/SleepTimer';
-import SkeletonLoader from '../components/SkeletonLoader';
-import ReconnectingToast from '../components/ReconnectingToast';
-import EqualizerBars from '../components/EqualizerBars';
-import {
-  Gesture,
-  GestureDetector,
-  Swipeable,
-} from 'react-native-gesture-handler';
-import DraggableFlatList, {
-  type RenderItemParams,
-  ScaleDecorator,
-} from 'react-native-draggable-flatlist';
-import TrackPlayer from '../services/trackPlayerShim';
-import {
-  isTrackPlayerAvailable,
-  onPlaybackProgress,
-  togglePlayback as audioToggle,
-  seekTo as audioSeekTo,
-} from '../services/audioPlayer';
-import Toast from 'react-native-toast-message';
+import Slider from '@react-native-community/slider';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
+  FadeIn,
+  FadeOut,
   cancelAnimation,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
   withSequence,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { apiClient } from '../services/apiClient';
-import { queryClient } from '../services/queryClient';
-import { showModal } from '../components/AppModal';
+import LikeButton from '../components/LikeButton';
+import SleepTimer, { useSleepTimerLabel } from '../components/SleepTimer';
+import SpeedSheet, { speedLabel } from '../components/SpeedSheet';
+import QueueSheet from '../components/QueueSheet';
+import ReconnectingToast from '../components/ReconnectingToast';
+import { LyricsCard, LyricsView } from '../components/Lyrics';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import { usePlayerStore, type RepeatModeValue, type Track } from '../store/playerStore';
+import { usePlayerStore, type PlaybackContext, type Track } from '../store/playerStore';
+import { openSaveSheet, openSongMenu } from '../store/songMenuStore';
+import * as playback from '../services/playbackController';
+import { setLiked, shareSong } from '../services/libraryActions';
+import { gestureHaptic, successHaptic, tapHaptic } from '../services/haptics';
+import { useArtworkColor } from '../hooks/useArtworkColor';
+import { useIsLiked } from '../hooks/useLiked';
+import { useLyrics } from '../hooks/useLyrics';
+import { Colors, Motion, TypeScale } from '../constants/theme';
 
-const MIN_ART_PADDING = 48;
-const MORPH_DURATION_MS = 180;
-const PRESS_SPRING = {
-  damping: 15,
-  stiffness: 200,
-};
+const SWIPE_SKIP_RATIO = 0.22;
 
-type ProgressState = {
-  position: number;
-  duration: number;
-};
-
-type SongRecord = {
-  id: string;
-  youtube_id: string;
-  title: string;
-  channel_name?: string | null;
-  thumbnail_url?: string | null;
-  duration_sec?: number | null;
-};
-
-type PlaylistRecord = {
-  id: string;
-  name: string;
-  description?: string | null;
-  songs?: SongRecord[];
-};
-
-type MarqueeTextProps = {
-  text: string;
-  style: StyleProp<TextStyle>;
+const CONTEXT_LABELS: Record<PlaybackContext['type'], string> = {
+  playlist: 'Playing from playlist',
+  liked: 'Playing from your library',
+  search: 'Playing from search',
+  channel: 'Playing from channel',
+  home: 'Playing from Home',
+  radio: 'Playing from radio',
+  queue: 'Playing from queue',
 };
 
 function formatTime(value: number) {
-  if (!Number.isFinite(value) || value < 0) {
-    return '0:00';
-  }
-
+  if (!Number.isFinite(value) || value < 0) return '0:00';
   const totalSeconds = Math.floor(value);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-function MarqueeText({ text, style }: MarqueeTextProps) {
+/** Long titles scroll horizontally; short ones sit still. */
+function MarqueeText({ text, style }: { text: string; style: StyleProp<TextStyle> }) {
   const [containerWidth, setContainerWidth] = useState(0);
   const [textWidth, setTextWidth] = useState(0);
   const translateX = useSharedValue(0);
@@ -111,19 +76,13 @@ function MarqueeText({ text, style }: MarqueeTextProps) {
   useEffect(() => {
     cancelAnimation(translateX);
     translateX.value = 0;
-
-    if (!containerWidth || !textWidth || textWidth <= containerWidth) {
-      return;
-    }
-
+    if (!containerWidth || !textWidth || textWidth <= containerWidth) return;
     const delta = textWidth - containerWidth + 24;
     translateX.value = withRepeat(
       withSequence(
-        withTiming(0, { duration: 1200 }),
-        withTiming(-delta, {
-          duration: Math.max(3500, delta * 22),
-          easing: Easing.linear,
-        }),
+        withTiming(0, { duration: 2000 }),
+        withTiming(-delta, { duration: Math.max(3500, delta * 25), easing: Easing.linear }),
+        withTiming(-delta, { duration: 1200 }),
         withTiming(0, { duration: 0 })
       ),
       -1,
@@ -131,16 +90,14 @@ function MarqueeText({ text, style }: MarqueeTextProps) {
     );
   }, [containerWidth, textWidth, translateX]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
-  }));
+  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ translateX: translateX.value }] }));
 
   return (
-    <View onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)} style={styles.marqueeMask}>
+    <View onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)} style={styles.marqueeMask}>
       <Animated.Text
         numberOfLines={1}
-        onLayout={(event) => setTextWidth(event.nativeEvent.layout.width)}
-        style={[style, animatedStyle]}
+        onLayout={(e) => setTextWidth(e.nativeEvent.layout.width)}
+        style={[style, styles.marqueeText, animatedStyle]}
       >
         {text}
       </Animated.Text>
@@ -148,941 +105,443 @@ function MarqueeText({ text, style }: MarqueeTextProps) {
   );
 }
 
+/** Seek bar: purple fill, thumb grows and a time tooltip appears while dragging. */
+function SeekBar() {
+  const position = usePlayerStore((s) => s.currentPosition);
+  const duration = usePlayerStore((s) => s.duration);
+  const [width, setWidth] = useState(0);
+  const [seekValue, setSeekValue] = useState<number | null>(null);
+  const thumbScale = useSharedValue(1);
+  const tooltipOpacity = useSharedValue(0);
+
+  const shown = seekValue ?? position;
+  const max = Math.max(duration, 1);
+  const thumbX = width > 0 ? (Math.min(shown, max) / max) * width : 0;
+  const tooltipLeft = Math.max(0, Math.min(thumbX - 24, Math.max(0, width - 48)));
+
+  const thumbStyle = useAnimatedStyle(() => ({ transform: [{ scale: thumbScale.value }] }));
+  const tooltipStyle = useAnimatedStyle(() => ({ opacity: tooltipOpacity.value }));
+
+  return (
+    <View style={styles.seekSection}>
+      <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={styles.seekSliderWrapper}>
+        <Animated.View pointerEvents="none" style={[styles.seekTooltip, tooltipStyle, { left: tooltipLeft }]}>
+          <Text style={styles.seekTooltipText}>{formatTime(shown)}</Text>
+        </Animated.View>
+        <Animated.View pointerEvents="none" style={[styles.seekThumb, thumbStyle, { left: thumbX - 6 }]} />
+        <Slider
+          value={position}
+          minimumValue={0}
+          maximumValue={max}
+          minimumTrackTintColor="#FFFFFF"
+          maximumTrackTintColor="rgba(255,255,255,0.25)"
+          thumbTintColor="transparent"
+          onSlidingStart={(value) => {
+            setSeekValue(value);
+            thumbScale.value = withTiming(1.5, { duration: Motion.duration.fast });
+            tooltipOpacity.value = withTiming(1, { duration: Motion.duration.fast });
+          }}
+          onValueChange={(value) => setSeekValue(value)}
+          onSlidingComplete={(value) => {
+            thumbScale.value = withTiming(1, { duration: Motion.duration.quick });
+            tooltipOpacity.value = withTiming(0, { duration: Motion.duration.quick });
+            void playback.seek(value).finally(() => setSeekValue(null));
+          }}
+        />
+      </View>
+      <View style={styles.timeRow}>
+        <Text style={styles.timeText}>{formatTime(shown)}</Text>
+        <Text style={styles.timeText}>{formatTime(duration)}</Text>
+      </View>
+    </View>
+  );
+}
+
+function UpNextCard({ onOpenQueue }: { onOpenQueue: () => void }) {
+  const userQueue = usePlayerStore((s) => s.userQueue);
+  const queue = usePlayerStore((s) => s.queue);
+  const currentIndex = usePlayerStore((s) => s.currentIndex);
+  const upNext: Track[] = [...userQueue, ...queue.slice(currentIndex + 1)].slice(0, 3);
+
+  return (
+    <View style={styles.infoCard}>
+      <View style={styles.infoCardHeader}>
+        <Text style={styles.infoCardTitle}>Up next</Text>
+        <Pressable onPress={onOpenQueue} hitSlop={8} style={styles.pillButton}>
+          <Text style={styles.pillButtonText}>Open queue</Text>
+        </Pressable>
+      </View>
+      {upNext.length === 0 ? (
+        <Text style={styles.infoCardEmpty}>Your queue is empty.</Text>
+      ) : (
+        upNext.map((track) => (
+          <Pressable
+            key={track.queueId ?? track.id}
+            onPress={() => track.queueId && void playback.playQueueItem(track.queueId)}
+            style={styles.upNextRow}
+          >
+            <Image
+              source={{ uri: track.thumbnailUrl || track.artwork }}
+              style={styles.upNextThumb}
+              contentFit="cover"
+            />
+            <View style={styles.upNextMeta}>
+              <Text numberOfLines={1} style={styles.upNextTitle}>{track.title}</Text>
+              <Text numberOfLines={1} style={styles.upNextSubtitle}>
+                {track.isAutoplay ? 'Autoplay · ' : ''}
+                {track.channelName || track.artist}
+              </Text>
+            </View>
+          </Pressable>
+        ))
+      )}
+    </View>
+  );
+}
+
 export default function NowPlayingScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { width, height } = useWindowDimensions();
-  const currentTrack = usePlayerStore((state) => state.currentTrack);
-  const isPlaying = usePlayerStore((state) => state.isPlaying);
-  const queue = usePlayerStore((state) => state.queue);
-  const repeatMode = usePlayerStore((state) => state.repeatMode);
-  const shuffle = usePlayerStore((state) => state.shuffle);
-  const setRepeat = usePlayerStore((state) => state.setRepeat);
-  const toggleShuffle = usePlayerStore((state) => state.toggleShuffle);
-  const reorderQueue = usePlayerStore((state) => state.reorderQueue);
-  const removeFromQueue = usePlayerStore((state) => state.removeFromQueue);
-  const setPosition = usePlayerStore((state) => state.setPosition);
-  const setDuration = usePlayerStore((state) => state.setDuration);
-  const showReconnecting = usePlayerStore((state) => state.showReconnecting);
-  const [progress, setProgress] = useState<ProgressState>({ position: 0, duration: 0 });
-  const [isLiked, setIsLiked] = useState(false);
-  const [resolvedSongId, setResolvedSongId] = useState<string | null>(null);
-  const [playlists, setPlaylists] = useState<PlaylistRecord[]>([]);
-  const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
-  const [isUpdatingLike, setIsUpdatingLike] = useState(false);
-  const [sliderWidth, setSliderWidth] = useState(0);
-  const [isSeeking, setIsSeeking] = useState(false);
-  const [seekingPosition, setSeekingPosition] = useState(0);
-  const translateY = useSharedValue(height);
-  const artRotation = useSharedValue(0);
-  const glowOpacity = useSharedValue(0.3);
-  const playPauseScale = useSharedValue(1);
-  const playPauseProgress = useSharedValue(isPlaying ? 1 : 0);
-  const seekThumbScale = useSharedValue(1);
-  const seekTooltipOpacity = useSharedValue(0);
-  const seekTooltipTranslateY = useSharedValue(8);
-  const seekGlowOpacity = useSharedValue(0.4);
-  const scrimOpacity = useSharedValue(0);
-  const trackDipOpacity = useSharedValue(0);
-  const shuffleRotation = useSharedValue(0);
-  const shuffleGlowScale = useSharedValue(1);
-  const shuffleGlowOpacity = useSharedValue(0);
-  const repeatBounce = useSharedValue(1);
-  const wasPlayingRef = useRef(isPlaying);
-  const visualIsPlayingRef = useRef(isPlaying);
-  const trackDipInitialRef = useRef(true);
-  const shuffleAnimInitialRef = useRef(true);
-  const repeatAnimInitialRef = useRef(true);
-  const [isPlaylistsVisible, setIsPlaylistsVisible] = useState(false);
+  const insets = useSafeAreaInsets();
+  const currentTrack = usePlayerStore((s) => s.currentTrack);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const isLoading = usePlayerStore((s) => s.isLoading);
+  const repeatMode = usePlayerStore((s) => s.repeatMode);
+  const shuffleMode = usePlayerStore((s) => s.shuffleMode);
+  const context = usePlayerStore((s) => s.context);
+  const playingFromUserQueue = usePlayerStore((s) => s.playingFromUserQueue);
+  const playbackRate = usePlayerStore((s) => s.playbackRate);
+  const showReconnecting = usePlayerStore((s) => s.showReconnecting);
+  const sleepLabel = useSleepTimerLabel();
+
   const [isQueueVisible, setIsQueueVisible] = useState(false);
   const [isSleepTimerVisible, setIsSleepTimerVisible] = useState(false);
-  const [isSongOptionsVisible, setIsSongOptionsVisible] = useState(false);
+  const [isSpeedVisible, setIsSpeedVisible] = useState(false);
+  const [isLyricsVisible, setIsLyricsVisible] = useState(false);
 
-  const albumSize = Math.min(width - MIN_ART_PADDING, height * 0.38, 320);
-
-  const thumbnailSource = useMemo(() => {
-    if (!currentTrack) {
-      return undefined;
-    }
-
-    return currentTrack.thumbnail_url || currentTrack.thumbnailUrl || currentTrack.artwork || undefined;
-  }, [currentTrack]);
-
+  const thumbnailSource = currentTrack
+    ? currentTrack.thumbnail_url || currentTrack.thumbnailUrl || currentTrack.artwork || undefined
+    : undefined;
+  const palette = useArtworkColor(thumbnailSource);
+  const youtubeId = currentTrack ? playback.getYoutubeId(currentTrack) : null;
+  const isLiked = useIsLiked(youtubeId);
+  const lyricsQuery = useLyrics(currentTrack);
   const channelName = currentTrack?.channel_name || currentTrack?.channelName || currentTrack?.artist || '';
-  const youtubeId = currentTrack?.youtube_id || currentTrack?.youtubeId || null;
 
-  useEffect(() => {
-    if (!isTrackPlayerAvailable) {
-      // expo-av path: receive live progress from the audioPlayer service
-      onPlaybackProgress((_playing, position, duration) => {
-        setProgress({ position, duration });
-        setPosition(position);
-        setDuration(duration);
-      });
-      return () => {
-        // deregister on unmount
-        onPlaybackProgress(() => {});
-      };
-    }
+  const albumSize = Math.min(width - 48, height * 0.42, 360);
 
-    // RNTP path (native builds): poll every second
-    let isMounted = true;
-    const syncProgress = async () => {
-      try {
-        const next = await TrackPlayer.getProgress();
-        if (!isMounted) return;
-        setProgress({ position: next.position, duration: next.duration });
-        setPosition(next.position);
-        setDuration(next.duration);
-      } catch {
-        // ignore while player is idle
-      }
-    };
-    void syncProgress();
-    const interval = setInterval(() => void syncProgress(), 1000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [setDuration, setPosition]);
+  // ── Gestures: swipe down to dismiss (only from the top of the page), swipe
+  //    the artwork sideways to skip. ──
+  const translateY = useSharedValue(0);
+  const artX = useSharedValue(0);
+  const scrollY = useSharedValue(0);
+  const startedAtTop = useSharedValue(true);
+  const scrollGesture = Gesture.Native();
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const hydrateLikedState = async () => {
-      if (!currentTrack || !youtubeId) {
-        setIsLiked(false);
-        setResolvedSongId(null);
-        return;
-      }
-
-      try {
-        const { data } = await apiClient.get<SongRecord[]>('/liked');
-        if (!isMounted) {
-          return;
-        }
-
-        const likedMatch = data.find((song) => song.youtube_id === youtubeId);
-        setIsLiked(Boolean(likedMatch));
-        setResolvedSongId(likedMatch?.id ?? null);
-      } catch {
-        if (isMounted) {
-          setIsLiked(false);
-        }
-      }
-    };
-
-    void hydrateLikedState();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [currentTrack, youtubeId]);
-
-  const dismiss = () => {
-    navigation.goBack();
+  const dismiss = () => navigation.goBack();
+  const skip = (direction: 'next' | 'previous') => {
+    gestureHaptic();
+    void (direction === 'next' ? playback.next() : playback.previous());
   };
 
-  const dismissThreshold = height * 0.3;
-
-  const panGesture = Gesture.Pan()
+  const dismissGesture = Gesture.Pan()
     .activeOffsetY(15)
-    .onUpdate((event) => {
-      translateY.value = Math.max(0, event.translationY);
-      scrimOpacity.value = Math.max(0, 1 - translateY.value / height);
+    .failOffsetX([-20, 20])
+    .simultaneousWithExternalGesture(scrollGesture)
+    .onStart(() => {
+      startedAtTop.value = scrollY.value <= 0;
     })
-    .onEnd(() => {
-      if (translateY.value > dismissThreshold) {
-        // Dismiss immediately — let the navigation modal animation handle
-        // the exit. Animating translateY to full screen height first caused
-        // crashes on Android because goBack() ran with an invalid layout.
-        translateY.value = withTiming(300, { duration: 150 });
-        scrimOpacity.value = withTiming(0, { duration: 150 });
+    .onUpdate((event) => {
+      if (!startedAtTop.value) return;
+      translateY.value = Math.max(0, event.translationY);
+    })
+    .onEnd((event) => {
+      if (!startedAtTop.value) return;
+      if (translateY.value > height * 0.25 || event.velocityY > 1000) {
+        translateY.value = withTiming(height * 0.3, { duration: Motion.duration.quick });
         runOnJS(dismiss)();
         return;
       }
-      translateY.value = withSpring(0, {
-        damping: 18,
-        stiffness: 180,
-      });
-      scrimOpacity.value = withTiming(1, { duration: 200 });
+      translateY.value = withTiming(0, { duration: Motion.duration.base, easing: Motion.easing.standard });
     });
 
-  const containerAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }],
-  }));
-
-
-  const playPauseButtonAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: playPauseScale.value }],
-  }));
-
-  const playIconAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: 1 - playPauseProgress.value,
-    transform: [{ scale: 1 - playPauseProgress.value * 0.3 }],
-  }));
-
-  const pauseIconAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: playPauseProgress.value,
-    transform: [{ scale: 0.7 + playPauseProgress.value * 0.3 }],
-  }));
-
-  const artworkRotationStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${artRotation.value}deg` }],
-  }));
-
-  const artworkGlowStyle = useAnimatedStyle(() => ({
-    opacity: glowOpacity.value,
-  }));
-
-  const seekThumbStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: seekThumbScale.value }],
-  }));
-
-  const seekTooltipAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: seekTooltipOpacity.value,
-    transform: [{ translateY: seekTooltipTranslateY.value }],
-  }));
-
-  const seekGlowAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: seekGlowOpacity.value,
-  }));
-
-  const scrimAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: scrimOpacity.value,
-  }));
-
-  const dipOverlayStyle = useAnimatedStyle(() => ({
-    opacity: trackDipOpacity.value,
-  }));
-
-  const shuffleAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${shuffleRotation.value}deg` }],
-  }));
-
-  const shuffleGlowStyle = useAnimatedStyle(() => ({
-    opacity: shuffleGlowOpacity.value,
-    transform: [{ scale: shuffleGlowScale.value }],
-  }));
-
-  const repeatAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: repeatBounce.value }],
-  }));
-
-  useEffect(() => {
-    if (isPlaying) {
-      const normalizedRotation = ((artRotation.value % 360) + 360) % 360;
-      cancelAnimation(artRotation);
-      cancelAnimation(glowOpacity);
-      artRotation.value = normalizedRotation;
-      artRotation.value = withRepeat(
-        withTiming(normalizedRotation + 360, {
-          duration: 8000,
-          easing: Easing.linear,
-        }),
-        -1,
-        false
-      );
-      glowOpacity.value = withRepeat(
-        withSequence(
-          withTiming(0.7, {
-            duration: 1000,
-            easing: Easing.inOut(Easing.ease),
-          }),
-          withTiming(0.3, {
-            duration: 1000,
-            easing: Easing.inOut(Easing.ease),
-          })
-        ),
-        -1,
-        false
-      );
-      wasPlayingRef.current = true;
-      return;
-    }
-
-    cancelAnimation(artRotation);
-    if (wasPlayingRef.current) {
-      artRotation.value = withTiming(artRotation.value + 18, {
-        duration: 600,
-        easing: Easing.out(Easing.cubic),
-      });
-    }
-
-    cancelAnimation(glowOpacity);
-    glowOpacity.value = withTiming(0.3, {
-      duration: 600,
-      easing: Easing.out(Easing.cubic),
-    });
-    wasPlayingRef.current = false;
-  }, [artRotation, glowOpacity, isPlaying]);
-
-  useEffect(() => {
-    if (!currentTrack) {
-      cancelAnimation(seekGlowOpacity);
-      seekGlowOpacity.value = 0;
-      return;
-    }
-    seekGlowOpacity.value = withRepeat(
-      withSequence(
-        withTiming(0.8, { duration: 750, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0.4, { duration: 750, easing: Easing.inOut(Easing.ease) })
-      ),
-      -1,
-      false
-    );
-  }, [currentTrack, seekGlowOpacity]);
-
-  useEffect(() => {
-    translateY.value = withSpring(0, { damping: 20, stiffness: 150 });
-    scrimOpacity.value = withTiming(1, { duration: 300 });
-  }, [scrimOpacity, translateY]);
-
-  useEffect(() => {
-    visualIsPlayingRef.current = isPlaying;
-    playPauseProgress.value = withTiming(isPlaying ? 1 : 0, {
-      duration: MORPH_DURATION_MS,
-      easing: Easing.out(Easing.cubic),
-    });
-  }, [isPlaying, playPauseProgress]);
-
-  useEffect(() => {
-    if (trackDipInitialRef.current) {
-      trackDipInitialRef.current = false;
-      return;
-    }
-    if (!currentTrack) return;
-    trackDipOpacity.value = withSequence(
-      withTiming(1, { duration: 300 }),
-      withTiming(0, { duration: 400 }),
-    );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTrack?.id, trackDipOpacity]);
-
-  useEffect(() => {
-    if (shuffleAnimInitialRef.current) {
-      shuffleAnimInitialRef.current = false;
-      return;
-    }
-    if (shuffle) {
-      shuffleRotation.value = withTiming(shuffleRotation.value + 360, { duration: 400, easing: Easing.out(Easing.quad) });
-      shuffleGlowOpacity.value = withSequence(withTiming(1, { duration: 0 }), withTiming(0, { duration: 400 }));
-      shuffleGlowScale.value = withTiming(1.3, { duration: 400 });
-    } else {
-      shuffleRotation.value = withTiming(shuffleRotation.value - 360, { duration: 400, easing: Easing.out(Easing.quad) });
-    }
-  }, [shuffle, shuffleRotation, shuffleGlowOpacity, shuffleGlowScale]);
-
-  useEffect(() => {
-    if (repeatAnimInitialRef.current) {
-      repeatAnimInitialRef.current = false;
-      return;
-    }
-    repeatBounce.value = withSequence(
-      withSpring(1.25, { damping: 10, stiffness: 300 }),
-      withSpring(0.95, { damping: 12, stiffness: 300 }),
-      withSpring(1.0, { damping: 15, stiffness: 200 }),
-    );
-  }, [repeatMode, repeatBounce]);
-
-  const ensureSongInCatalogue = useCallback(async () => {
-    if (!currentTrack || !youtubeId) {
-      throw new Error('No current track loaded.');
-    }
-
-    if (resolvedSongId) {
-      return resolvedSongId;
-    }
-
-    const payload = {
-      youtube_id: youtubeId,
-      title: currentTrack.title,
-      channel_name: channelName,
-      thumbnail_url: thumbnailSource ?? null,
-      duration_sec: Math.floor(progress.duration || 0) || null,
-      genre: 'Bollywood',
-      language: 'Hindi',
-    };
-
-    const { data } = await apiClient.post<SongRecord>('/songs', payload);
-    setResolvedSongId(data.id);
-    return data.id;
-  }, [channelName, currentTrack, progress.duration, resolvedSongId, thumbnailSource, youtubeId]);
-
-  const handleToggleLike = async () => {
-    if (isUpdatingLike || !currentTrack) {
-      return;
-    }
-
-    const wasLiked = isLiked;
-    setIsUpdatingLike(true);
-    setIsLiked(!wasLiked);
-
-    try {
-      const songId = await ensureSongInCatalogue();
-
-      if (wasLiked) {
-        await apiClient.delete(`/liked/${songId}`);
+  const skipGesture = Gesture.Pan()
+    .activeOffsetX([-15, 15])
+    .failOffsetY([-15, 15])
+    .onUpdate((event) => {
+      artX.value = event.translationX;
+    })
+    .onEnd((event) => {
+      const commit = Math.abs(event.translationX) > width * SWIPE_SKIP_RATIO || Math.abs(event.velocityX) > 800;
+      if (commit) {
+        const exitX = event.translationX < 0 ? -width : width;
+        artX.value = withSequence(
+          withTiming(exitX, { duration: Motion.duration.quick, easing: Motion.easing.accelerate }),
+          withTiming(-exitX * 0.5, { duration: 0 }),
+          withTiming(0, { duration: Motion.duration.enter, easing: Motion.easing.decelerate })
+        );
+        runOnJS(skip)(event.translationX < 0 ? 'next' : 'previous');
       } else {
-        await apiClient.post('/liked', { song_id: songId });
+        artX.value = withTiming(0, { duration: Motion.duration.base, easing: Motion.easing.standard });
       }
-
-      // Instantly refresh liked queries across all screens
-      void queryClient.invalidateQueries({ queryKey: ['liked'] });
-    } catch {
-      setIsLiked(wasLiked);
-      Toast.show({
-        type: 'error',
-        text1: 'Could not update liked songs',
-      });
-    } finally {
-      setIsUpdatingLike(false);
-    }
-  };
-
-  const loadPlaylists = useCallback(async () => {
-    setIsLoadingPlaylists(true);
-    try {
-      const { data } = await apiClient.get<Array<{ id: string; name: string; description?: string }>>('/playlists');
-      const detailedPlaylists = await Promise.all(
-        data.map(async (playlist) => {
-          const detail = await apiClient.get<PlaylistRecord>(`/playlists/${playlist.id}`);
-          return detail.data;
-        })
-      );
-      setPlaylists(detailedPlaylists);
-    } catch {
-      Toast.show({
-        type: 'error',
-        text1: 'Could not load playlists',
-      });
-    } finally {
-      setIsLoadingPlaylists(false);
-    }
-  }, []);
-
-  const handleOpenPlaylists = async () => {
-    setIsPlaylistsVisible(true);
-    if (playlists.length === 0) {
-      await loadPlaylists();
-    }
-  };
-
-  const handleAddToPlaylist = async (playlist: PlaylistRecord) => {
-    try {
-      const songId = await ensureSongInCatalogue();
-      await apiClient.post(`/playlists/${playlist.id}/songs`, { song_id: songId });
-      setIsPlaylistsVisible(false);
-      Toast.show({
-        type: 'success',
-        text1: `Added to ${playlist.name}`,
-      });
-    } catch (err: any) {
-      setIsPlaylistsVisible(false);
-      if (err?.response?.status === 409) {
-        showModal({
-          title: 'Already Added',
-          message: `This song is already in "${playlist.name}".`,
-          icon: 'information-circle',
-          iconColor: '#F59E0B',
-        });
-      } else {
-        Toast.show({
-          type: 'error',
-          text1: 'Could not add song to playlist',
-        });
-      }
-    }
-  };
-
-  const handleOpenQueue = () => {
-    setIsQueueVisible(true);
-  };
-
-  const handleQueueDragEnd = async ({ data }: { data: Track[] }) => {
-    await reorderQueue(data);
-  };
-
-  const handleRemoveQueueItem = async (trackId: string) => {
-    await removeFromQueue(trackId);
-  };
-
-  const togglePlayback = async () => {
-    const nowPlaying = await audioToggle();
-    usePlayerStore.setState({ isPlaying: nowPlaying });
-  };
-
-  const handlePlayPausePressIn = () => {
-    playPauseScale.value = withSpring(0.88, PRESS_SPRING);
-  };
-
-  const handlePlayPausePressOut = () => {
-    playPauseScale.value = withSpring(1, PRESS_SPRING);
-  };
-
-  const handlePlayPausePress = () => {
-    visualIsPlayingRef.current = !visualIsPlayingRef.current;
-    playPauseProgress.value = withTiming(visualIsPlayingRef.current ? 1 : 0, {
-      duration: MORPH_DURATION_MS,
-      easing: Easing.out(Easing.cubic),
     });
-    void togglePlayback();
-  };
 
-  const skipPrevious = async () => {
-    try {
-      await TrackPlayer.skipToPrevious();
-    } catch {
-      // Ignore queue boundary errors in the full player.
-    }
-  };
-
-  const skipNext = async () => {
-    try {
-      await TrackPlayer.skipToNext();
-    } catch {
-      // Ignore queue boundary errors in the full player.
-    }
-  };
-
-  const handleSlidingStart = (value: number) => {
-    setIsSeeking(true);
-    setSeekingPosition(value);
-    seekThumbScale.value = withSpring(1.4, { damping: 10, stiffness: 300 });
-    seekTooltipOpacity.value = withTiming(1, { duration: 150 });
-    seekTooltipTranslateY.value = withTiming(0, { duration: 150 });
-  };
-
-  const handleValueChange = (value: number) => {
-    setSeekingPosition(value);
-  };
-
-  const handleSeekComplete = async (value: number) => {
-    setIsSeeking(false);
-    seekThumbScale.value = withSpring(1.0, { damping: 10, stiffness: 300 });
-    seekTooltipOpacity.value = withTiming(0, { duration: 150 });
-    seekTooltipTranslateY.value = withTiming(8, { duration: 150 });
-    await audioSeekTo(value);
-    setProgress((prev) => ({ ...prev, position: value }));
-    setPosition(value);
-  };
-
-  const handleShuffleToggle = async () => {
-    await toggleShuffle();
-  };
-
-  const cycleRepeatMode = async () => {
-    const nextMode: RepeatModeValue =
-      repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off';
-    await setRepeat(nextMode);
-  };
-
-  const handleShareYouTube = () => {
-    if (!youtubeId) return;
-    void Linking.openURL(`https://www.youtube.com/watch?v=${youtubeId}`);
-  };
-
-  const renderPlaylistItem = ({ item }: { item: PlaylistRecord }) => (
-    <Pressable onPress={() => void handleAddToPlaylist(item)} style={styles.sheetRow}>
-      <View>
-        <Text style={styles.sheetRowTitle}>{item.name}</Text>
-        <Text style={styles.sheetRowSubtitle}>{item.songs?.length ?? 0} songs</Text>
-      </View>
-      <Ionicons name="add-circle-outline" size={22} color="#e2e2e2" />
-    </Pressable>
-  );
-
-  const renderQueueItem = ({ item, drag, isActive }: RenderItemParams<Track>) => {
-    const isCurrent = item.id === currentTrack?.id;
-    const thumbnail = item.thumbnail_url || item.thumbnailUrl || item.artwork;
-    const itemChannel = item.channel_name || item.channelName || item.artist;
-
-    return (
-      <ScaleDecorator>
-        <Swipeable
-          renderRightActions={() => (
-            <Pressable
-              onPress={() => void handleRemoveQueueItem(item.id)}
-              style={styles.deleteAction}
-            >
-              <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
-            </Pressable>
-          )}
-        >
-          <Pressable
-            delayLongPress={150}
-            onLongPress={drag}
-            style={[
-              styles.queueRow,
-              isCurrent && styles.queueRowCurrent,
-              { opacity: isActive ? 0.85 : 1 },
-            ]}
-          >
-            <View style={styles.queueThumbWrap}>
-              {thumbnail ? (
-                <Image
-                  source={{ uri: thumbnail }}
-                  style={StyleSheet.absoluteFillObject}
-                  contentFit="cover"
-                />
-              ) : (
-                <Ionicons name="musical-notes" size={16} color="rgba(255,255,255,0.3)" />
-              )}
-            </View>
-            <View style={styles.queueMeta}>
-              <Text numberOfLines={1} style={[styles.queueTitle, isCurrent && styles.queueTitleCurrent]}>
-                {item.title}
-              </Text>
-              <Text numberOfLines={1} style={styles.queueSubtitle}>{itemChannel}</Text>
-            </View>
-            <View style={styles.queueRowActions}>
-              {!isCurrent && (
-                <Pressable
-                  onPress={() => void handleRemoveQueueItem(item.id)}
-                  style={styles.queueRemoveBtn}
-                  hitSlop={4}
-                >
-                  <Ionicons name="close-outline" size={20} color="rgba(255,255,255,0.4)" />
-                </Pressable>
-              )}
-              <Ionicons name="reorder-three-outline" size={20} color="rgba(255,255,255,0.3)" />
-            </View>
-          </Pressable>
-        </Swipeable>
-      </ScaleDecorator>
-    );
-  };
+  const containerStyle = useAnimatedStyle(() => ({ transform: [{ translateY: translateY.value }] }));
+  const artStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: artX.value }],
+    opacity: 1 - Math.min(Math.abs(artX.value) / width, 0.5),
+  }));
 
   if (!currentTrack) {
     return (
       <SafeAreaView style={styles.emptyState}>
         <Pressable hitSlop={8} onPress={dismiss} style={styles.headerBtn}>
-          <Ionicons name="chevron-down" size={24} color="rgba(255,255,255,0.9)" />
+          <Ionicons name="chevron-down" size={26} color="#FFFFFF" />
         </Pressable>
+        <Text style={styles.emptyText}>Nothing is playing.</Text>
       </SafeAreaView>
     );
   }
 
-  const displayPosition = isSeeking ? seekingPosition : progress.position;
-  const thumbX = sliderWidth > 0
-    ? (displayPosition / Math.max(progress.duration, 1)) * sliderWidth
-    : 0;
-  const tooltipLeft = Math.max(0, Math.min(thumbX - 24, Math.max(0, sliderWidth - 48)));
+  const song = playback.trackToSong(currentTrack);
+  const contextLabel = playingFromUserQueue ? 'Playing from queue' : context ? CONTEXT_LABELS[context.type] : 'Now playing';
+  const contextName = playingFromUserQueue ? 'Next in queue' : context?.name ?? '';
+
+  const handleToggleLike = () => {
+    successHaptic();
+    void setLiked(song, !isLiked);
+  };
 
   return (
-    <>
-      <GestureDetector gesture={panGesture}>
-        <Animated.View style={[styles.flex, containerAnimatedStyle]}>
-          <SafeAreaView style={styles.container}>
-            {/* Ambient blurred background */}
-            {thumbnailSource ? (
-              <>
-                <Image
-                  source={{ uri: thumbnailSource }}
-                  style={[StyleSheet.absoluteFillObject, styles.bgImageTransform]}
-                  contentFit="cover"
-                />
-                <SafeBlurView
-                  blurAmount={40}
-                  blurType="dark"
-                  reducedTransparencyFallbackColor="#000000"
-                  style={StyleSheet.absoluteFillObject}
-                />
-              </>
-            ) : null}
-            <Animated.View pointerEvents="none" style={[styles.overlay, scrimAnimatedStyle]} />
-            <Animated.View pointerEvents="none" style={[styles.dipOverlay, dipOverlayStyle]} />
-
-            {/* Reconnecting toast — absolutely positioned, won't affect layout */}
-            <ReconnectingToast visible={showReconnecting} />
-
-            {/* Header */}
-            <View style={styles.header}>
-              <Pressable hitSlop={8} onPress={dismiss} style={styles.headerBtn}>
-                <Ionicons name="chevron-down" size={24} color="rgba(255,255,255,0.9)" />
-              </Pressable>
-              <Text style={styles.headerLabel}>NOW PLAYING</Text>
-              <Pressable hitSlop={8} onPress={() => setIsSongOptionsVisible(true)} style={styles.headerBtn}>
-                <Ionicons name="ellipsis-vertical" size={20} color="rgba(255,255,255,0.9)" />
-              </Pressable>
-            </View>
-
-            {/* Album art */}
-            <View style={styles.artSection}>
-              <View style={[styles.artworkWrapper, { width: albumSize, height: albumSize }]}>
-                <SkeletonLoader
-                  width={albumSize}
-                  height={albumSize}
-                  borderRadius={16}
-                  style={{ position: 'absolute', top: 0, left: 0 }}
-                />
-                <Animated.View pointerEvents="none" style={[styles.artGlow, artworkGlowStyle]} />
-                <Animated.View style={[styles.artAnimatedWrapper, artworkRotationStyle]}>
-                  <Image
-                    source={thumbnailSource ? { uri: thumbnailSource } : undefined}
-                    style={styles.artwork}
-                    contentFit="cover"
-                  />
-                </Animated.View>
-                <View style={styles.youtubeBadge}>
-                  <Ionicons name="logo-youtube" size={14} color="#FFFFFF" />
-                </View>
-              </View>
-            </View>
-
-            {/* Player controls */}
-            <View style={styles.playerControls}>
-              {/* Track meta */}
-              <View style={styles.metaSection}>
-                <View style={styles.titleRow}>
-                  <View style={styles.titleWrap}>
-                    <MarqueeText text={currentTrack.title} style={styles.title} />
-                  </View>
-                  <View style={styles.titleIndicator}>
-                    <EqualizerBars isPlaying={isPlaying} size="md" color="#F5A623" />
-                  </View>
-                </View>
-                <Pressable
-                  onPress={() => {
-                    if (channelName) {
-                      navigation.navigate('Channel', { channelName });
-                    }
-                  }}
-                >
-                  <Text numberOfLines={1} style={styles.channelName}>
-                    {channelName}
-                  </Text>
-                </Pressable>
-              </View>
-
-              {/* Seek bar */}
-              <View style={styles.seekSection}>
-                <View
-                  onLayout={(e) => setSliderWidth(e.nativeEvent.layout.width)}
-                  style={styles.seekSliderWrapper}
-                >
-                  {/* Seek position tooltip */}
-                  <Animated.View
-                    pointerEvents="none"
-                    style={[styles.seekTooltip, seekTooltipAnimatedStyle, { left: tooltipLeft }]}
-                  >
-                    <Text style={styles.seekTooltipText}>
-                      {formatTime(isSeeking ? seekingPosition : progress.position)}
-                    </Text>
-                  </Animated.View>
-
-                  {/* Custom animated thumb (native thumb is transparent) */}
-                  <Animated.View
-                    pointerEvents="none"
-                    style={[styles.seekThumb, seekThumbStyle, { left: thumbX - 10 }]}
-                  />
-
-                  {/* Glow pulse at leading edge of filled track */}
-                  <Animated.View
-                    pointerEvents="none"
-                    style={[styles.seekGlow, seekGlowAnimatedStyle, { left: Math.max(0, thumbX - 6) }]}
-                  />
-
-                  <Slider
-                    value={progress.position}
-                    minimumValue={0}
-                    maximumValue={Math.max(progress.duration, 1)}
-                    minimumTrackTintColor="#7C3AED"
-                    maximumTrackTintColor="rgba(255,255,255,0.15)"
-                    thumbTintColor="transparent"
-                    onSlidingStart={handleSlidingStart}
-                    onValueChange={handleValueChange}
-                    onSlidingComplete={(value) => void handleSeekComplete(value)}
-                  />
-                </View>
-                <View style={styles.timeRow}>
-                  <Text style={styles.timeText}>{formatTime(progress.position)}</Text>
-                  <Text style={styles.timeText}>{formatTime(progress.duration)}</Text>
-                </View>
-              </View>
-
-              {/* Transport controls */}
-              <View style={styles.controlsRow}>
-                <Pressable hitSlop={8} onPress={() => void skipPrevious()} style={styles.transportButton}>
-                  <Ionicons name="play-skip-back" size={28} color="rgba(255,255,255,0.85)" />
-                </Pressable>
-
-                <Pressable
-                  hitSlop={8}
-                  onPress={handlePlayPausePress}
-                  onPressIn={handlePlayPausePressIn}
-                  onPressOut={handlePlayPausePressOut}
-                  style={styles.playPauseButton}
-                >
-                  <Animated.View style={[styles.playPauseButtonInner, playPauseButtonAnimatedStyle]}>
-                    <LinearGradient
-                      colors={['#7C3AED', '#5B21B6']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={StyleSheet.absoluteFillObject}
-                    />
-                    <View style={styles.playPauseIconContainer}>
-                      <Animated.View style={[styles.playPauseIconLayer, playIconAnimatedStyle]}>
-                        <Ionicons name="play" size={32} color="#FFFFFF" style={styles.playIconOffset} />
-                      </Animated.View>
-                      <Animated.View style={[styles.playPauseIconLayer, pauseIconAnimatedStyle]}>
-                        <Ionicons name="pause" size={32} color="#FFFFFF" />
-                      </Animated.View>
-                    </View>
-                  </Animated.View>
-                </Pressable>
-
-                <Pressable hitSlop={8} onPress={() => void skipNext()} style={styles.transportButton}>
-                  <Ionicons name="play-skip-forward" size={28} color="rgba(255,255,255,0.85)" />
-                </Pressable>
-              </View>
-
-              {/* Secondary actions glass panel */}
-              <View style={styles.actionsPanel}>
-                <LikeButton isLiked={isLiked} onToggle={() => void handleToggleLike()} size={24} />
-                <Pressable onPress={() => void handleOpenPlaylists()} style={styles.actionButton}>
-                  <Ionicons name="add-circle-outline" size={24} color="rgba(255,255,255,0.7)" />
-                </Pressable>
-                <Pressable style={styles.actionButton} onPress={() => void handleShuffleToggle()}>
-                  <View style={styles.shuffleContainer}>
-                    <Animated.View pointerEvents="none" style={[styles.shuffleGlow, shuffleGlowStyle]} />
-                    <Animated.View style={shuffleAnimStyle}>
-                      <Ionicons
-                        name="shuffle"
-                        size={24}
-                        color={shuffle ? '#7C3AED' : 'rgba(255,255,255,0.7)'}
-                      />
-                    </Animated.View>
-                  </View>
-                </Pressable>
-                <Pressable style={styles.actionButton} onPress={() => void cycleRepeatMode()}>
-                  <Animated.View style={repeatAnimStyle}>
-                    <Ionicons
-                      name={repeatMode === 'one' ? 'repeat-outline' : 'repeat'}
-                      size={24}
-                      color={
-                        repeatMode === 'off'
-                          ? 'rgba(255,255,255,0.7)'
-                          : repeatMode === 'one'
-                          ? '#F5A623'
-                          : '#7C3AED'
-                      }
-                    />
-                  </Animated.View>
-                </Pressable>
-                <Pressable onPress={handleOpenQueue} style={styles.actionButton}>
-                  <Ionicons name="list-outline" size={24} color="rgba(255,255,255,0.7)" />
-                </Pressable>
-                <Pressable style={styles.actionButton} onPress={() => setIsSleepTimerVisible(true)}>
-                  <Ionicons name="moon-outline" size={24} color="rgba(255,255,255,0.7)" />
-                </Pressable>
-              </View>
-            </View>
-          </SafeAreaView>
-        </Animated.View>
-      </GestureDetector>
-
-      {/* Add to Playlist sheet */}
-      <AnimatedBottomSheet
-        isVisible={isPlaylistsVisible}
-        onClose={() => setIsPlaylistsVisible(false)}
-      >
-        <View style={styles.sheetContainer}>
-          <Text style={styles.sheetTitle}>Add To Playlist</Text>
-          <FlatList
-            data={playlists}
-            keyExtractor={(item) => item.id}
-            renderItem={renderPlaylistItem}
-            style={{ height: height * 0.6 }}
-            ListEmptyComponent={
-              <Text style={styles.sheetEmptyText}>
-                {isLoadingPlaylists ? 'Loading playlists...' : 'No playlists available.'}
-              </Text>
-            }
+    <GestureDetector gesture={dismissGesture}>
+      <Animated.View style={[styles.flex, containerStyle]}>
+        {/* Artwork-tinted gradient — crossfades when the track changes */}
+        <Animated.View
+          key={palette.background}
+          entering={FadeIn.duration(Motion.duration.slow)}
+          exiting={FadeOut.duration(Motion.duration.slow)}
+          style={StyleSheet.absoluteFillObject}
+        >
+          <LinearGradient
+            colors={[palette.background, palette.muted, '#000000']}
+            locations={[0, 0.45, 0.85]}
+            style={StyleSheet.absoluteFillObject}
           />
-        </View>
-      </AnimatedBottomSheet>
+        </Animated.View>
 
-      {/* Queue sheet */}
-      <AnimatedBottomSheet
-        isVisible={isQueueVisible}
-        onClose={() => setIsQueueVisible(false)}
-        backgroundColor="rgba(12,15,15,0.97)"
-      >
-        <View style={styles.queueSheetContent}>
-          <View style={styles.queueSheetHeader}>
-            <Text style={styles.queueSheetTitle}>Up Next</Text>
-            <Pressable onPress={() => void handleShuffleToggle()} style={styles.queueShuffleBtn}>
-              <Ionicons name="shuffle" size={20} color={shuffle ? '#7C3AED' : 'rgba(255,255,255,0.6)'} />
-            </Pressable>
+        <ReconnectingToast visible={showReconnecting} />
+
+        <View style={[styles.header, { paddingTop: insets.top + 4 }]}>
+          <Pressable hitSlop={8} onPress={dismiss} style={styles.headerBtn} accessibilityLabel="Close">
+            <Ionicons name="chevron-down" size={26} color="#FFFFFF" />
+          </Pressable>
+          <View style={styles.headerCenter}>
+            <Text numberOfLines={1} style={styles.headerLabel}>{contextLabel}</Text>
+            {contextName ? <Text numberOfLines={1} style={styles.headerContext}>{contextName}</Text> : null}
           </View>
-          <View style={[styles.queueListContainer, { height: height * 0.6 }]}>
-            <DraggableFlatList
-              data={queue}
-              keyExtractor={(item) => item.id}
-              onDragEnd={handleQueueDragEnd}
-              renderItem={renderQueueItem}
-              contentContainerStyle={styles.queueListContent}
-              ListHeaderComponent={
-                currentTrack ? (
-                  <Text style={styles.queueSectionLabel}>NOW PLAYING</Text>
-                ) : undefined
-              }
-            />
-          </View>
+          <Pressable
+            hitSlop={8}
+            onPress={() => openSongMenu(song)}
+            style={styles.headerBtn}
+            accessibilityLabel="More options"
+          >
+            <Ionicons name="ellipsis-vertical" size={20} color="#FFFFFF" />
+          </Pressable>
         </View>
-      </AnimatedBottomSheet>
 
-      {/* Song options sheet */}
-      <SongOptionsSheet
-        isVisible={isSongOptionsVisible}
-        onClose={() => setIsSongOptionsVisible(false)}
-        thumbnail={thumbnailSource}
-        title={currentTrack?.title ?? ''}
-        channel={channelName}
-        isLiked={isLiked}
-        onLike={() => void handleToggleLike()}
-        onAddToPlaylist={() => void handleOpenPlaylists()}
-        onShare={handleShareYouTube}
-      />
+        <GestureDetector gesture={scrollGesture}>
+        <ScrollView
+          onScroll={(e) => {
+            scrollY.value = e.nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={16}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
+        >
+          {/* ── Player ── */}
+          <View style={[styles.player, { minHeight: height - insets.top - 64 }]}>
+            <GestureDetector gesture={skipGesture}>
+              <Animated.View style={[styles.artSection, artStyle]}>
+                <Image
+                  source={thumbnailSource ? { uri: thumbnailSource } : undefined}
+                  style={[styles.artwork, { width: albumSize, height: albumSize }]}
+                  contentFit="cover"
+                  transition={Motion.duration.base}
+                />
+              </Animated.View>
+            </GestureDetector>
 
-      <SleepTimer isVisible={isSleepTimerVisible} onClose={() => setIsSleepTimerVisible(false)} />
-    </>
+            <View style={styles.metaRow}>
+              <View style={styles.metaText}>
+                <MarqueeText text={currentTrack.title} style={styles.title} />
+                <Pressable onPress={() => channelName && navigation.navigate('Channel', { channelName })}>
+                  <Text numberOfLines={1} style={styles.channelName}>{channelName}</Text>
+                </Pressable>
+              </View>
+              <LikeButton isLiked={isLiked} onToggle={handleToggleLike} size={26} />
+            </View>
+
+            <SeekBar />
+
+            <View style={styles.controlsRow}>
+              <Pressable
+                hitSlop={8}
+                onPress={() => {
+                  tapHaptic();
+                  void playback.cycleShuffle();
+                }}
+                style={styles.modeButton}
+                accessibilityLabel={`Shuffle: ${shuffleMode}`}
+              >
+                <Ionicons name="shuffle" size={26} color={shuffleMode === 'off' ? Colors.textSubdued : Colors.secondary} />
+                {shuffleMode === 'smart' ? (
+                  <Ionicons name="sparkles" size={11} color={Colors.secondary} style={styles.modeBadgeIcon} />
+                ) : null}
+                <View style={[styles.modeDot, shuffleMode !== 'off' && styles.modeDotActive]} />
+              </Pressable>
+
+              <Pressable hitSlop={8} onPress={() => skip('previous')} style={styles.transportButton} accessibilityLabel="Previous">
+                <Ionicons name="play-skip-back" size={32} color="#FFFFFF" />
+              </Pressable>
+
+              <Pressable
+                onPress={() => {
+                  tapHaptic();
+                  void playback.togglePlay();
+                }}
+                style={({ pressed }) => [styles.playPauseButton, pressed && { transform: [{ scale: Motion.pressScale }] }]}
+                accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
+              >
+                {isLoading && !isPlaying ? (
+                  <ActivityIndicator color="#000000" />
+                ) : (
+                  <Ionicons
+                    name={isPlaying ? 'pause' : 'play'}
+                    size={34}
+                    color="#000000"
+                    style={!isPlaying ? styles.playIconOffset : undefined}
+                  />
+                )}
+              </Pressable>
+
+              <Pressable hitSlop={8} onPress={() => skip('next')} style={styles.transportButton} accessibilityLabel="Next">
+                <Ionicons name="play-skip-forward" size={32} color="#FFFFFF" />
+              </Pressable>
+
+              <Pressable
+                hitSlop={8}
+                onPress={() => {
+                  tapHaptic();
+                  playback.cycleRepeat();
+                }}
+                style={styles.modeButton}
+                accessibilityLabel={`Repeat: ${repeatMode}`}
+              >
+                <Ionicons name="repeat" size={26} color={repeatMode === 'off' ? Colors.textSubdued : Colors.secondary} />
+                {repeatMode === 'one' ? <Text style={styles.repeatOneBadge}>1</Text> : null}
+                <View style={[styles.modeDot, repeatMode !== 'off' && styles.modeDotActive]} />
+              </Pressable>
+            </View>
+
+            <View style={styles.actionsRow}>
+              <Pressable onPress={() => setIsSleepTimerVisible(true)} style={styles.actionButton} hitSlop={6}>
+                <Ionicons name={sleepLabel ? 'moon' : 'moon-outline'} size={20} color={sleepLabel ? Colors.secondary : Colors.textSubdued} />
+                {sleepLabel ? <Text style={styles.actionLabelActive}>{sleepLabel}</Text> : null}
+              </Pressable>
+              <Pressable onPress={() => setIsSpeedVisible(true)} style={styles.actionButton} hitSlop={6}>
+                <Text style={[styles.speedText, playbackRate !== 1 && styles.actionLabelActive]}>
+                  {speedLabel(playbackRate)}
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => openSaveSheet(song)} style={styles.actionButton} hitSlop={6} accessibilityLabel="Save to playlist">
+                <Ionicons name="add-circle-outline" size={22} color={Colors.textSubdued} />
+              </Pressable>
+              <Pressable onPress={() => void shareSong(song)} style={styles.actionButton} hitSlop={6} accessibilityLabel="Share">
+                <Ionicons name="share-social-outline" size={20} color={Colors.textSubdued} />
+              </Pressable>
+              <Pressable onPress={() => setIsQueueVisible(true)} style={styles.actionButton} hitSlop={6} accessibilityLabel="Queue">
+                <Ionicons name="list" size={22} color={Colors.textSubdued} />
+              </Pressable>
+            </View>
+          </View>
+
+          {/* ── Below the fold: lyrics, up next, about the channel ── */}
+          <LyricsCard
+            lyrics={lyricsQuery.data}
+            isLoading={lyricsQuery.isLoading}
+            isError={lyricsQuery.isError}
+            accent={palette.accent}
+            onExpand={() => setIsLyricsVisible(true)}
+          />
+
+          <UpNextCard onOpenQueue={() => setIsQueueVisible(true)} />
+
+          <View style={styles.infoCard}>
+            <Text style={styles.infoCardTitle}>About the channel</Text>
+            <View style={styles.channelRow}>
+              <View style={[styles.channelAvatar, { backgroundColor: palette.accent }]}>
+                <Text style={styles.channelAvatarText}>{channelName.charAt(0).toUpperCase() || '♪'}</Text>
+              </View>
+              <Text numberOfLines={2} style={styles.channelCardName}>{channelName}</Text>
+            </View>
+            <View style={styles.channelActions}>
+              <Pressable
+                onPress={() => navigation.navigate('Channel', { channelName })}
+                style={styles.pillButton}
+              >
+                <Text style={styles.pillButtonText}>Go to channel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => void playback.startRadio(song).catch(() => {})}
+                style={styles.pillButton}
+              >
+                <Ionicons name="radio-outline" size={14} color="#FFFFFF" />
+                <Text style={styles.pillButtonText}>Song radio</Text>
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
+        </GestureDetector>
+
+        <QueueSheet isVisible={isQueueVisible} onClose={() => setIsQueueVisible(false)} />
+        <SleepTimer isVisible={isSleepTimerVisible} onClose={() => setIsSleepTimerVisible(false)} />
+        <SpeedSheet isVisible={isSpeedVisible} onClose={() => setIsSpeedVisible(false)} />
+        <LyricsView
+          visible={isLyricsVisible}
+          onClose={() => setIsLyricsVisible(false)}
+          lyrics={lyricsQuery.data}
+          background={palette.background}
+          title={currentTrack.title}
+          artist={channelName}
+        />
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
 const styles = StyleSheet.create({
   flex: {
-    flex: 1,
-  },
-  container: {
     backgroundColor: '#000000',
     flex: 1,
   },
   emptyState: {
     backgroundColor: '#000000',
     flex: 1,
+    padding: 16,
   },
-  bgImageTransform: {
-    transform: [{ scale: 1.1 }],
-  },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.62)',
-  },
-  dipOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0A0A0A',
+  emptyText: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.body,
+    marginTop: 32,
+    textAlign: 'center',
   },
 
   // ── Header ──
   header: {
     alignItems: 'center',
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingBottom: 4,
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    zIndex: 1,
+    paddingBottom: 8,
+    paddingHorizontal: 12,
   },
   headerBtn: {
     alignItems: 'center',
@@ -1090,365 +549,276 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 40,
   },
+  headerCenter: {
+    alignItems: 'center',
+    flex: 1,
+    paddingHorizontal: 8,
+  },
   headerLabel: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 12,
+    color: Colors.textSubdued,
+    fontSize: TypeScale.caption,
     fontWeight: '600',
-    letterSpacing: 2,
+    letterSpacing: 1,
     textTransform: 'uppercase',
   },
+  headerContext: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.small,
+    fontWeight: '700',
+    marginTop: 2,
+  },
 
-  // ── Album art ──
+  // ── Player ──
+  player: {
+    justifyContent: 'space-between',
+    paddingBottom: 16,
+    paddingHorizontal: 24,
+  },
   artSection: {
     alignItems: 'center',
     flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
-  artworkWrapper: {
-    position: 'relative',
-  },
-  artGlow: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#7C3AED',
-    borderRadius: 24,
-    shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.9,
-    shadowRadius: 28,
-    transform: [{ scale: 1.03 }],
-  },
-  artAnimatedWrapper: {
-    height: '100%',
-    width: '100%',
+    paddingVertical: 16,
   },
   artwork: {
-    backgroundColor: '#121414',
     borderRadius: 16,
-    height: '100%',
-    width: '100%',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
   },
-  youtubeBadge: {
-    alignItems: 'center',
-    backgroundColor: '#FF0000',
-    borderRadius: 8,
-    bottom: 12,
-    height: 30,
-    justifyContent: 'center',
-    position: 'absolute',
-    right: 12,
-    width: 30,
-  },
-
-  // ── Player controls zone ──
-  playerControls: {
-    gap: 16,
-    paddingBottom: 24,
-    paddingHorizontal: 24,
-  },
-  metaSection: {
-    gap: 4,
-  },
-  titleRow: {
+  metaRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 12,
+    marginBottom: 12,
   },
-  titleWrap: {
+  metaText: {
     flex: 1,
     minWidth: 0,
   },
-  titleIndicator: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   marqueeMask: {
     overflow: 'hidden',
-    width: '100%',
+  },
+  marqueeText: {
+    alignSelf: 'flex-start',
   },
   title: {
-    color: '#e2e2e2',
-    fontSize: 24,
+    color: '#FFFFFF',
+    fontSize: TypeScale.heading,
     fontWeight: '700',
-    lineHeight: 30,
   },
   channelName: {
-    color: 'rgba(204,195,216,0.75)',
-    fontSize: 16,
-    fontWeight: '400',
+    color: Colors.textSubdued,
+    fontSize: TypeScale.body,
+    marginTop: 2,
   },
+
+  // ── Seek ──
   seekSection: {
-    gap: 4,
+    marginBottom: 8,
   },
   seekSliderWrapper: {
-    overflow: 'visible',
-    position: 'relative',
+    justifyContent: 'center',
+    marginHorizontal: -8,
   },
   seekThumb: {
-    backgroundColor: '#d2bbff',
-    borderRadius: 10,
-    height: 20,
-    position: 'absolute',
-    top: 10,
-    width: 20,
-  },
-  seekTooltip: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(18,20,20,0.92)',
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: 'center',
-    minWidth: 48,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    position: 'absolute',
-    top: -36,
-  },
-  seekTooltipText: {
-    color: '#d2bbff',
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
-  seekGlow: {
-    backgroundColor: '#7C3AED',
+    backgroundColor: '#FFFFFF',
     borderRadius: 6,
     height: 12,
+    marginLeft: 8,
     position: 'absolute',
-    top: 14,
     width: 12,
+  },
+  seekTooltip: {
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    borderRadius: 8,
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    position: 'absolute',
+    top: -30,
+    width: 48,
+  },
+  seekTooltipText: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.caption,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   timeRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: -4,
   },
   timeText: {
-    color: 'rgba(204,195,216,0.65)',
-    fontSize: 12,
-    fontWeight: '600',
+    color: Colors.textSubdued,
+    fontSize: TypeScale.caption,
   },
+
+  // ── Transport ──
   controlsRow: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    marginBottom: 16,
+  },
+  modeButton: {
+    alignItems: 'center',
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  modeBadgeIcon: {
+    position: 'absolute',
+    right: 4,
+    top: 4,
+  },
+  repeatOneBadge: {
+    color: Colors.secondary,
+    fontSize: 9,
+    fontWeight: '800',
+    position: 'absolute',
+    top: 16,
+  },
+  modeDot: {
+    borderRadius: 2,
+    bottom: 2,
+    height: 4,
+    position: 'absolute',
+    width: 4,
+  },
+  modeDotActive: {
+    backgroundColor: Colors.secondary,
   },
   transportButton: {
     alignItems: 'center',
-    height: 48,
+    height: 52,
     justifyContent: 'center',
-    width: 48,
+    width: 52,
   },
   playPauseButton: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
     borderRadius: 999,
-    height: 64,
-    width: 64,
-  },
-  playPauseButtonInner: {
-    alignItems: 'center',
-    borderRadius: 999,
-    elevation: 8,
-    height: 64,
+    height: 68,
     justifyContent: 'center',
-    overflow: 'hidden',
-    shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    width: 64,
-  },
-  playPauseIconContainer: {
-    alignItems: 'center',
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
-  },
-  playPauseIconLayer: {
-    alignItems: 'center',
-    height: 32,
-    justifyContent: 'center',
-    position: 'absolute',
-    width: 32,
+    width: 68,
   },
   playIconOffset: {
-    marginLeft: 3,
+    marginLeft: 4,
   },
-  actionsPanel: {
+  actionsRow: {
     alignItems: 'center',
-    backgroundColor: 'rgba(26,28,28,0.5)',
-    borderColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 20,
-    borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    padding: 16,
   },
   actionButton: {
     alignItems: 'center',
-    height: 40,
-    justifyContent: 'center',
-    width: 40,
-  },
-  shuffleContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  shuffleGlow: {
-    backgroundColor: '#7C3AED',
-    borderRadius: 999,
-    height: 40,
-    position: 'absolute',
-    width: 40,
-  },
-
-  // ── Queue sheet ──
-  queueSheetBg: {
-    backgroundColor: 'rgba(12,15,15,0.97)',
-  },
-  queueSheetContent: {
-    paddingTop: 4,
-  },
-  queueSheetHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingBottom: 16,
-    paddingHorizontal: 20,
-  },
-  queueSheetTitle: {
-    color: '#e2e2e2',
-    fontSize: 24,
-    fontWeight: '700',
-  },
-  queueShuffleBtn: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(40,42,43,0.5)',
-    borderRadius: 999,
-    height: 40,
-    justifyContent: 'center',
-    width: 40,
-  },
-  queueSectionLabel: {
-    color: '#7C3AED',
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 1.5,
-    marginBottom: 12,
-    paddingHorizontal: 20,
-    textTransform: 'uppercase',
-  },
-  queueListContainer: {},
-  queueListContent: {
-    paddingBottom: 40,
-    paddingHorizontal: 20,
-  },
-  queueRow: {
-    alignItems: 'center',
-    borderRadius: 12,
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 4,
-    padding: 8,
-  },
-  queueRowCurrent: {
-    backgroundColor: 'rgba(124,58,237,0.1)',
-    borderColor: 'rgba(124,58,237,0.2)',
-    borderWidth: 1,
-  },
-  queueThumbWrap: {
-    alignItems: 'center',
-    backgroundColor: '#333535',
-    borderRadius: 8,
-    flexShrink: 0,
-    height: 48,
-    justifyContent: 'center',
-    overflow: 'hidden',
-    width: 48,
-  },
-  queueMeta: {
-    flex: 1,
-    minWidth: 0,
-  },
-  queueTitle: {
-    color: '#e2e2e2',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  queueTitleCurrent: {
-    color: '#7C3AED',
-  },
-  queueSubtitle: {
-    color: 'rgba(204,195,216,0.7)',
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  queueRowActions: {
-    alignItems: 'center',
     flexDirection: 'row',
     gap: 4,
-  },
-  queueRemoveBtn: {
-    alignItems: 'center',
-    borderRadius: 999,
     height: 40,
     justifyContent: 'center',
-    width: 40,
+    minWidth: 40,
   },
-  deleteAction: {
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    backgroundColor: '#C62828',
-    borderRadius: 8,
-    justifyContent: 'center',
-    marginBottom: 4,
-    paddingHorizontal: 20,
+  actionLabelActive: {
+    color: Colors.secondary,
+    fontSize: TypeScale.small,
+    fontWeight: '600',
+  },
+  speedText: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+    fontWeight: '700',
   },
 
-  // ── Playlists sheet ──
-  sheetContainer: {
-    paddingHorizontal: 20,
-    paddingTop: 4,
+  // ── Cards below the player ──
+  infoCard: {
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderRadius: 16,
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 16,
   },
-  sheetTitle: {
-    color: '#e2e2e2',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
-  sheetRow: {
+  infoCardHeader: {
     alignItems: 'center',
-    backgroundColor: '#1e2020',
-    borderRadius: 12,
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
   },
-  sheetRowTitle: {
-    color: '#e2e2e2',
-    fontSize: 15,
+  infoCardTitle: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.body,
+    fontWeight: '700',
+  },
+  infoCardEmpty: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+  },
+  pillButton: {
+    alignItems: 'center',
+    borderColor: 'rgba(255,255,255,0.35)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  pillButtonText: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.small,
     fontWeight: '600',
   },
-  sheetRowSubtitle: {
-    color: 'rgba(204,195,216,0.7)',
-    fontSize: 13,
-    marginTop: 2,
+  upNextRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    paddingVertical: 6,
   },
-  sheetEmptyText: {
-    color: 'rgba(204,195,216,0.5)',
-    fontSize: 15,
-    paddingTop: 16,
-    textAlign: 'center',
+  upNextThumb: {
+    borderRadius: 8,
+    height: 40,
+    width: 40,
+  },
+  upNextMeta: {
+    flex: 1,
+    minWidth: 0,
+  },
+  upNextTitle: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.small,
+    fontWeight: '600',
+  },
+  upNextSubtitle: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+  },
+  channelRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    marginVertical: 12,
+  },
+  channelAvatar: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 56,
+    justifyContent: 'center',
+    width: 56,
+  },
+  channelAvatarText: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.heading,
+    fontWeight: '700',
+  },
+  channelCardName: {
+    color: '#FFFFFF',
+    flex: 1,
+    fontSize: TypeScale.large,
+    fontWeight: '700',
+  },
+  channelActions: {
+    flexDirection: 'row',
+    gap: 8,
   },
 });
-
-
-
-
-
-
-

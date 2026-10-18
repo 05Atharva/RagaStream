@@ -6,7 +6,14 @@
  * queryClient.invalidateQueries() after mutations without needing
  * the useQueryClient() hook (which requires a component context).
  */
-import { QueryClient } from '@tanstack/react-query';
+import NetInfo from '@react-native-community/netinfo';
+import { QueryClient, onlineManager } from '@tanstack/react-query';
+
+onlineManager.setEventListener((setOnline) =>
+  NetInfo.addEventListener((state) => {
+    setOnline(state.isConnected !== false);
+  })
+);
 
 export const queryClient = new QueryClient({
   defaultOptions: {

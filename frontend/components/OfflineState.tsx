@@ -1,7 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import {
-  Animated,
-  Easing,
   Pressable,
   StyleSheet,
   Text,
@@ -14,27 +12,6 @@ type Props = {
 };
 
 export default function OfflineState({ onRetry }: Props) {
-  const floatAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(floatAnim, {
-          toValue: -10,
-          duration: 2000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(floatAnim, {
-          toValue: 0,
-          duration: 2000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-  }, [floatAnim]);
-
   return (
     <View style={styles.container}>
       {/* Ambient purple glow — sits behind all content */}
@@ -43,9 +20,9 @@ export default function OfflineState({ onRetry }: Props) {
       </View>
 
       {/* Icon */}
-      <Animated.View style={[styles.iconCircle, { transform: [{ translateY: floatAnim }] }]}>
+      <View style={styles.iconCircle}>
         <Ionicons name="cloud-offline-outline" size={60} color="rgba(204,195,216,0.8)" />
-      </Animated.View>
+      </View>
 
       <Text style={styles.title}>You're offline</Text>
       <Text style={styles.subtitle}>

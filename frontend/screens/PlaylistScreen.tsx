@@ -2,893 +2,730 @@ import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Dimensions,
-  FlatList,
-  Linking,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import DraggableFlatList, { type RenderItemParams } from 'react-native-draggable-flatlist';
-import { Swipeable } from 'react-native-gesture-handler';
-import TrackPlayer from '../services/trackPlayerShim';
+import DraggableFlatList, { type RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import Toast from 'react-native-toast-message';
+import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
+import PlaylistCover from '../components/PlaylistCover';
+import SongRow from '../components/SongRow';
+import {
+  CollapsingTopBar,
+  PlayButtonSlot,
+  StickyPlayButton,
+  useCollapsingHeader,
+} from '../components/CollapsingHeader';
 import { apiClient } from '../services/apiClient';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import { usePlayerStore, type Track } from '../store/playerStore';
-import { recordPlayHistory } from '../services/historyService';
-import { playTrack, isTrackPlayerAvailable } from '../services/audioPlayer';
-import SafeBlurView from '../components/SafeBlurView';
-import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
-import SongOptionsSheet from '../components/SongOptionsSheet';
-import { showModal } from '../components/AppModal';
+import { usePlayerStore } from '../store/playerStore';
+import { useSettingsStore } from '../store/settingsStore';
+import { usePlaylist } from '../hooks/usePlaylists';
+import { useArtworkColor } from '../hooks/useArtworkColor';
+import * as playback from '../services/playbackController';
+import {
+  addSongToPlaylist,
+  invalidatePlaylists,
+  removeSongFromPlaylist,
+} from '../services/libraryActions';
+import { gestureHaptic, successHaptic, tapHaptic } from '../services/haptics';
+import type { Song } from '../hooks/useSongs';
+import { Colors, TypeScale } from '../constants/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Playlist'>;
+type PlaylistSong = Song & { added_at?: string | null };
+type SortKey = 'custom' | 'title' | 'channel' | 'added' | 'duration';
 
-type SongRecord = {
-  id: string;
-  youtube_id: string;
-  title: string;
-  channel_name?: string | null;
-  thumbnail_url?: string | null;
-  duration_sec?: number | null;
+const SORT_LABELS: Record<SortKey, string> = {
+  custom: 'Custom order',
+  title: 'Title',
+  channel: 'Channel',
+  added: 'Date added',
+  duration: 'Duration',
 };
 
-type PlaylistRecord = {
-  id: string;
-  name: string;
-  description?: string | null;
-  songs?: SongRecord[];
-};
-
-type PlaylistSummary = {
-  id: string;
-  name: string;
-};
-
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-
-function formatTime(value: number) {
-  if (!Number.isFinite(value) || value < 0) return '0:00';
-  const totalSeconds = Math.floor(value);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
-function formatDuration(totalSec: number) {
+function formatTotal(totalSec: number) {
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return h > 0 ? `${h} hr ${m} min` : `${m} min`;
+}
+
+function sortSongs(songs: PlaylistSong[], sort: SortKey): PlaylistSong[] {
+  const copy = [...songs];
+  switch (sort) {
+    case 'title':
+      return copy.sort((a, b) => a.title.localeCompare(b.title));
+    case 'channel':
+      return copy.sort((a, b) => (a.channel_name ?? '').localeCompare(b.channel_name ?? ''));
+    case 'added':
+      return copy.sort((a, b) => (b.added_at ?? '').localeCompare(a.added_at ?? ''));
+    case 'duration':
+      return copy.sort((a, b) => (a.duration_sec ?? 0) - (b.duration_sec ?? 0));
+    default:
+      return copy;
+  }
 }
 
 export default function PlaylistScreen({ route, navigation }: Props) {
   const { playlistId } = route.params;
   const queryClient = useQueryClient();
+  const insets = useSafeAreaInsets();
+  const { scrollY, onScrollOffset } = useCollapsingHeader();
+
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [loadingSongId, setLoadingSongId] = useState<string | null>(null);
-  const [optionsSong, setOptionsSong] = useState<SongRecord | null>(null);
-  const [isPlaylistPickerVisible, setIsPlaylistPickerVisible] = useState(false);
-  const currentTrack = usePlayerStore((state) => state.currentTrack);
+  const [sort, setSort] = useState<SortKey>('custom');
+  const [query, setQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const [anchorY, setAnchorY] = useState(0);
+  const [recsSeed, setRecsSeed] = useState(0);
 
-  const playlistQuery = useQuery({
-    queryKey: ['playlist', playlistId],
-    queryFn: async () => {
-      const { data } = await apiClient.get<PlaylistRecord>(`/playlists/${playlistId}`);
-      return data;
-    },
-  });
+  const context = usePlayerStore((s) => s.context);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const shuffleMode = usePlayerStore((s) => s.shuffleMode);
+  const isPinned = useSettingsStore((s) => s.pinnedPlaylistIds.includes(playlistId));
+  const hiddenIds = useSettingsStore((s) => s.hiddenYoutubeIds);
 
-  const likedQuery = useQuery({
-    queryKey: ['liked'],
-    queryFn: async () => {
-      const { data } = await apiClient.get<SongRecord[]>('/liked');
-      return data;
-    },
-  });
-  const likedIds = useMemo(
-    () => new Set((likedQuery.data ?? []).map((song) => song.id)),
-    [likedQuery.data],
-  );
-
-  const otherPlaylistsQuery = useQuery({
-    queryKey: ['playlists'],
-    queryFn: async () => {
-      const { data } = await apiClient.get<PlaylistSummary[]>('/playlists');
-      return data;
-    },
-    enabled: isPlaylistPickerVisible,
-  });
-  const otherPlaylists = (otherPlaylistsQuery.data ?? []).filter((p) => p.id !== playlistId);
-
+  const playlistQuery = usePlaylist(playlistId);
   const playlist = playlistQuery.data;
-  const songs = playlist?.songs ?? [];
-  const totalDuration = useMemo(
-    () => songs.reduce((sum, s) => sum + (s.duration_sec ?? 0), 0),
-    [songs],
-  );
-  const firstThumb = songs[0]?.thumbnail_url;
+  const songs = useMemo(() => (playlist?.songs ?? []) as PlaylistSong[], [playlist?.songs]);
+  const covers = useMemo(() => songs.map((s) => s.thumbnail_url).filter(Boolean) as string[], [songs]);
+  const palette = useArtworkColor(covers[0]);
+  const isThisPlaying = context?.type === 'playlist' && context.id === playlistId && isPlaying;
 
-  const buildTrack = async (song: SongRecord) => {
-    const { data } = await apiClient.get<{ stream_url: string }>('/youtube/stream', {
-      params: { id: song.youtube_id },
-    });
-    return {
-      id: song.id,
-      title: song.title,
-      artist: song.channel_name || 'Unknown channel',
-      album: playlist?.name ?? 'Playlist',
-      artwork: song.thumbnail_url || '',
-      url: data.stream_url,
-      source: 'youtube',
-      youtubeId: song.youtube_id,
-      channelName: song.channel_name || undefined,
-      thumbnailUrl: song.thumbnail_url || undefined,
-    } as Track;
+  const visibleSongs = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? songs.filter((s) => s.title.toLowerCase().includes(q) || (s.channel_name ?? '').toLowerCase().includes(q))
+      : songs;
+    return sortSongs(filtered, sort);
+  }, [songs, query, sort]);
+  const canReorder = sort === 'custom' && !query.trim();
+
+  const totalDuration = useMemo(() => songs.reduce((sum, s) => sum + (s.duration_sec ?? 0), 0), [songs]);
+  const playContext = { type: 'playlist' as const, name: playlist?.name ?? 'Playlist', id: playlistId };
+
+  // "Recommended songs": radio from a couple of this playlist's songs.
+  const seedIds = useMemo(() => {
+    if (songs.length === 0) return [];
+    const picks = [songs[recsSeed % songs.length], songs[(recsSeed * 7 + 3) % songs.length]];
+    return [...new Set(picks.map((s) => s.youtube_id))];
+  }, [songs, recsSeed]);
+
+  const recsQuery = useQuery({
+    queryKey: ['playlist-recs', playlistId, seedIds],
+    enabled: seedIds.length > 0,
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () => {
+      const results = await Promise.allSettled(seedIds.map((id) => playback.fetchRadio(id, 15)));
+      const seen = new Set(songs.map((s) => s.youtube_id));
+      const recs: playback.SongInput[] = [];
+      results.forEach((r) => {
+        if (r.status !== 'fulfilled') return;
+        r.value.forEach((song) => {
+          if (!seen.has(song.youtube_id)) {
+            seen.add(song.youtube_id);
+            recs.push(song);
+          }
+        });
+      });
+      return recs;
+    },
+  });
+  const recommendations = (recsQuery.data ?? []).filter((r) => !hiddenIds.includes(r.youtube_id)).slice(0, 8);
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
+    invalidatePlaylists([playlistId]);
   };
 
-  // Plays `first` immediately (single stream fetch) so tapping a song never
-  // blocks on resolving stream URLs for the rest of the playlist. The
-  // remainder is fetched one at a time afterwards, on a delay, so it never
-  // competes with the just-started track for bandwidth on a slow/shared
-  // connection (e.g. a mobile hotspot) during its critical initial buffer.
-  const playTracks = async (first: SongRecord, rest: SongRecord[]) => {
+  const play = async (index: number, shuffle?: boolean) => {
+    const song = visibleSongs[index];
+    if (!song) return;
+    if (!shuffle) setLoadingSongId(song.id);
     try {
-      const firstTrack = await buildTrack(first);
-      await playTrack(firstTrack);
-      usePlayerStore.setState({ currentTrack: firstTrack, queue: [firstTrack], isPlaying: true });
-      void recordPlayHistory(firstTrack.id);
+      await playback.playSongs(visibleSongs, index, playContext, { shuffle, thumbnail: covers[0] });
       navigation.navigate('NowPlaying');
     } catch {
       Toast.show({ type: 'error', text1: 'Could not start playlist' });
+    } finally {
+      setLoadingSongId(null);
+    }
+  };
+
+  const handleHeaderPlay = () => {
+    if (context?.type === 'playlist' && context.id === playlistId) {
+      void playback.togglePlay();
       return;
     }
+    void play(0, shuffleMode !== 'off');
+  };
 
-    if (rest.length === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    for (const song of rest) {
-      try {
-        const track = await buildTrack(song);
-        // Native queue (skip next/previous) only exists in a real build —
-        // the expo-av fallback used in Expo Go plays one track at a time.
-        if (isTrackPlayerAvailable) {
-          await TrackPlayer.add(track);
-        }
-        usePlayerStore.setState((state) => ({ queue: [...state.queue, track] }));
-      } catch {
-        // Skip songs that fail to resolve; the rest of the queue still fills in.
-      }
+  const toggleShuffle = () => {
+    tapHaptic();
+    if (context?.type === 'playlist' && context.id === playlistId) {
+      void playback.cycleShuffle();
+    } else {
+      usePlayerStore.setState({ shuffleMode: shuffleMode === 'off' ? 'shuffle' : 'off' });
     }
-  };
-
-  const handlePlayAll = async () => {
-    if (songs.length === 0) return;
-    await playTracks(songs[0], songs.slice(1));
-  };
-
-  const handleShuffle = async () => {
-    if (songs.length === 0) return;
-    const [first, ...rest] = [...songs].sort(() => Math.random() - 0.5);
-    await playTracks(first, rest);
   };
 
   const handleRename = async () => {
     const nextName = nameDraft.trim();
-    if (!nextName || !playlist) { setIsEditingName(false); return; }
+    setIsEditingName(false);
+    if (!nextName || !playlist || nextName === playlist.name) return;
     try {
       await apiClient.put(`/playlists/${playlistId}`, { name: nextName });
-      await queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
-      await queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      refresh();
     } catch {
       Toast.show({ type: 'error', text1: 'Could not rename playlist' });
-    } finally {
-      setIsEditingName(false);
     }
   };
 
   const handleRemoveSong = async (songId: string) => {
     try {
-      await apiClient.delete(`/playlists/${playlistId}/songs/${songId}`);
-      await queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
-      await queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      await removeSongFromPlaylist(songId, playlistId);
+      refresh();
     } catch {
       Toast.show({ type: 'error', text1: 'Could not remove song' });
     }
   };
 
-  const handleReorder = async (data: SongRecord[]) => {
+  const handleReorder = async (data: PlaylistSong[]) => {
+    queryClient.setQueryData(['playlist', playlistId], (old: typeof playlist) => (old ? { ...old, songs: data } : old));
     try {
-      await apiClient.put(`/playlists/${playlistId}/songs/reorder`, {
-        song_ids: data.map((s) => s.id),
-      });
-      queryClient.setQueryData(['playlist', playlistId], (old: PlaylistRecord | undefined) => {
-        if (!old) return old;
-        return { ...old, songs: data };
-      });
+      await apiClient.put(`/playlists/${playlistId}/songs/reorder`, { song_ids: data.map((s) => s.id) });
+      invalidatePlaylists();
     } catch {
       Toast.show({ type: 'error', text1: 'Could not reorder playlist' });
+      refresh();
     }
   };
 
-  const handleSongPress = async (song: SongRecord) => {
-    setLoadingSongId(song.id);
-    await playTracks(song, songs.filter((item) => item.id !== song.id));
-    setLoadingSongId(null);
+  const handleAddRecommendation = async (song: playback.SongInput) => {
+    successHaptic();
+    try {
+      await addSongToPlaylist(song, playlistId);
+      refresh();
+      void queryClient.invalidateQueries({ queryKey: ['playlist-containing', song.youtube_id] });
+      Toast.show({ type: 'success', text1: `Added to ${playlist?.name ?? 'playlist'}` });
+    } catch {
+      Toast.show({ type: 'error', text1: 'Could not add song' });
+    }
   };
 
   const handleDeletePlaylist = () => {
-    Alert.alert(
-      'Delete Playlist',
-      `Are you sure you want to delete "${playlist?.name}"? This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await apiClient.delete(`/playlists/${playlistId}`);
-              await queryClient.invalidateQueries({ queryKey: ['playlists'] });
-              Toast.show({ type: 'success', text1: 'Playlist deleted' });
-              navigation.goBack();
-            } catch {
-              Toast.show({ type: 'error', text1: 'Could not delete playlist' });
-            }
-          },
+    setIsMenuVisible(false);
+    Alert.alert('Delete playlist', `Delete "${playlist?.name}"? This cannot be undone.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await apiClient.delete(`/playlists/${playlistId}`);
+            invalidatePlaylists();
+            Toast.show({ type: 'success', text1: 'Playlist deleted' });
+            navigation.goBack();
+          } catch {
+            Toast.show({ type: 'error', text1: 'Could not delete playlist' });
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  const handleToggleLikeForSong = async (song: SongRecord) => {
-    const wasLiked = likedIds.has(song.id);
-    try {
-      if (wasLiked) {
-        await apiClient.delete(`/liked/${song.id}`);
-      } else {
-        await apiClient.post('/liked', { song_id: song.id });
-      }
-      await queryClient.invalidateQueries({ queryKey: ['liked'] });
-    } catch {
-      Toast.show({ type: 'error', text1: 'Could not update liked songs' });
-    }
+  const cycleSort = () => {
+    tapHaptic();
+    const order: SortKey[] = ['custom', 'title', 'channel', 'added', 'duration'];
+    setSort(order[(order.indexOf(sort) + 1) % order.length]);
   };
 
-  const handleAddOptionsSongToPlaylist = async (target: PlaylistSummary) => {
-    if (!optionsSong) return;
-    try {
-      await apiClient.post(`/playlists/${target.id}/songs`, { song_id: optionsSong.id });
-      setIsPlaylistPickerVisible(false);
-      Toast.show({ type: 'success', text1: `Added to ${target.name}` });
-    } catch (err: any) {
-      setIsPlaylistPickerVisible(false);
-      if (err?.response?.status === 409) {
-        showModal({
-          title: 'Already Added',
-          message: `This song is already in "${target.name}".`,
-          icon: 'information-circle',
-          iconColor: '#F59E0B',
-        });
-      } else {
-        Toast.show({ type: 'error', text1: 'Could not add song to playlist' });
-      }
-    }
-  };
+  const goToSearch = () => navigation.navigate('Tabs', { screen: 'Search' });
 
-  const handleShareOptionsSong = () => {
-    if (!optionsSong) return;
-    void Linking.openURL(`https://www.youtube.com/watch?v=${optionsSong.youtube_id}`);
-  };
+  const renderSongItem = ({ item, getIndex, drag, isActive }: RenderItemParams<PlaylistSong>) => (
+    <ScaleDecorator>
+      <View style={{ opacity: isActive ? 0.85 : 1 }}>
+        <SongRow
+          song={item}
+          isLoading={loadingSongId === item.id}
+          onPress={() => void play(getIndex() ?? 0)}
+          menuOptions={{ playlistId }}
+          onLongPress={
+            canReorder
+              ? () => {
+                  gestureHaptic();
+                  drag();
+                }
+              : undefined
+          }
+          trailing={canReorder ? <Ionicons name="reorder-three" size={22} color={Colors.textMuted} /> : null}
+          onSwipeRemove={() => void handleRemoveSong(item.id)}
+        />
+      </View>
+    </ScaleDecorator>
+  );
 
-  const renderSongItem = ({ item, drag, isActive }: RenderItemParams<SongRecord>) => {
-    const isCurrentTrack = currentTrack?.id === item.id;
-    const isLoadingThis = loadingSongId === item.id;
-
-    return (
-      <Swipeable
-        renderRightActions={() => (
-          <Pressable
-            onPress={() => void handleRemoveSong(item.id)}
-            style={styles.removeButton}
-          >
-            <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
-          </Pressable>
-        )}
+  const header = (
+    <View>
+      <LinearGradient
+        colors={[palette.background, '#000000']}
+        style={[styles.hero, { paddingTop: insets.top + 56 }]}
       >
-        <Pressable
-          onPress={() => void handleSongPress(item)}
-          onLongPress={drag}
-          style={[styles.songRow, isActive && styles.songRowActive]}
-        >
-          <View style={styles.songThumbWrap}>
-            {item.thumbnail_url ? (
-              <Image
-                source={{ uri: item.thumbnail_url }}
-                style={StyleSheet.absoluteFillObject}
-                contentFit="cover"
-              />
-            ) : (
-              <Ionicons name="musical-notes" size={18} color="rgba(255,255,255,0.3)" />
-            )}
-            {isCurrentTrack && (
-              <View style={[StyleSheet.absoluteFillObject, styles.nowPlayingOverlay]}>
-                <Ionicons name="bar-chart-outline" size={16} color="#7C3AED" />
-              </View>
-            )}
-          </View>
-
-          <View style={styles.songMeta}>
-            <Text
-              numberOfLines={1}
-              style={[styles.songTitle, isCurrentTrack && styles.songTitleActive]}
-            >
-              {item.title}
-            </Text>
-            <Text numberOfLines={1} style={styles.songSubtitle}>
-              {item.channel_name || 'Unknown channel'}
-            </Text>
-          </View>
-
-          {isLoadingThis ? (
-            <ActivityIndicator color="#7C3AED" size="small" />
-          ) : (
-            <Text style={styles.songDuration}>{formatTime(item.duration_sec ?? 0)}</Text>
-          )}
-
-          <Pressable
-            hitSlop={10}
-            onPress={() => setOptionsSong(item)}
-            style={({ pressed }) => [styles.songOptionsBtn, pressed && styles.cardPressed]}
-          >
-            <Ionicons name="ellipsis-vertical" size={18} color="rgba(255,255,255,0.5)" />
-          </Pressable>
-        </Pressable>
-      </Swipeable>
-    );
-  };
-
-  // Header only shown when list has songs; negative margin breaks out of list's 20px padding
-  const renderHeader = () => {
-    if (songs.length === 0) return null;
-    return (
-      <>
-        <View style={styles.hero}>
-          {firstThumb ? (
-            <Image
-              source={{ uri: firstThumb }}
-              style={[StyleSheet.absoluteFillObject, styles.heroBgImage]}
-              contentFit="cover"
-            />
-          ) : (
-            <View style={[StyleSheet.absoluteFillObject, styles.heroBgFallback]} />
-          )}
-          <SafeBlurView
-            blurAmount={40}
-            blurType="dark"
-            style={StyleSheet.absoluteFillObject}
+        <PlaylistCover thumbnails={covers} size={200} style={styles.heroCover} />
+        {isEditingName ? (
+          <TextInput
+            value={nameDraft}
+            onChangeText={setNameDraft}
+            onSubmitEditing={() => void handleRename()}
+            onBlur={() => void handleRename()}
+            style={styles.nameInput}
+            autoFocus
+            selectTextOnFocus
           />
-          <LinearGradient
-            colors={['rgba(0,0,0,0.2)', 'rgba(0,0,0,0.82)']}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            style={StyleSheet.absoluteFillObject}
-          />
-          <View style={styles.heroContent}>
-            <View style={styles.heroArtWrap}>
-              {firstThumb ? (
-                <Image
-                  source={{ uri: firstThumb }}
-                  style={StyleSheet.absoluteFillObject}
-                  contentFit="cover"
-                />
-              ) : (
-                <Ionicons name="musical-notes" size={56} color="rgba(255,255,255,0.25)" />
-              )}
-            </View>
-
-            {isEditingName ? (
-              <TextInput
-                value={nameDraft}
-                onChangeText={setNameDraft}
-                onSubmitEditing={() => void handleRename()}
-                onBlur={() => void handleRename()}
-                style={styles.nameInput}
-                placeholderTextColor="rgba(255,255,255,0.45)"
-                autoFocus
-              />
-            ) : (
-              <Pressable
-                onLongPress={() => {
-                  setNameDraft(playlist?.name ?? '');
-                  setIsEditingName(true);
-                }}
-              >
-                <Text numberOfLines={2} style={styles.heroTitle}>
-                  {playlist?.name ?? 'Playlist'}
-                </Text>
-              </Pressable>
-            )}
-
-            <Text style={styles.heroSubtitle}>
-              {songs.length} songs · {formatDuration(totalDuration)}
-            </Text>
-
-            <View style={styles.heroActions}>
-              <Pressable
-                onPress={() => void handlePlayAll()}
-                style={({ pressed }) => [styles.playBtn, pressed && styles.cardPressed]}
-              >
-                <Ionicons name="play" size={26} color="#FFFFFF" />
-              </Pressable>
-              <Pressable
-                onPress={() => void handleShuffle()}
-                style={({ pressed }) => [styles.shuffleBtn, pressed && styles.cardPressed]}
-              >
-                <Ionicons name="shuffle" size={18} color="#e2e2e2" />
-                <Text style={styles.shuffleBtnText}>Shuffle</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.chipsRow}>
+        ) : (
           <Pressable
-            onPress={() => (navigation as any).navigate('Search')}
-            style={({ pressed }) => [styles.chip, pressed && styles.cardPressed]}
-          >
-            <Ionicons name="add" size={15} color="rgba(255,255,255,0.9)" />
-            <Text style={styles.chipText}>Add Songs</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => {
+            onLongPress={() => {
               setNameDraft(playlist?.name ?? '');
               setIsEditingName(true);
             }}
-            style={({ pressed }) => [styles.chip, pressed && styles.cardPressed]}
           >
-            <Ionicons name="create-outline" size={15} color="rgba(255,255,255,0.9)" />
-            <Text style={styles.chipText}>Rename</Text>
+            <Text numberOfLines={2} style={styles.heroTitle}>{playlist?.name ?? 'Playlist'}</Text>
+          </Pressable>
+        )}
+        {playlist?.description ? <Text style={styles.heroDescription}>{playlist.description}</Text> : null}
+        <Text style={styles.heroMeta}>
+          {songs.length} songs{totalDuration > 0 ? ` · ${formatTotal(totalDuration)}` : ''}
+        </Text>
+      </LinearGradient>
+
+      {isSearching ? (
+        <View style={styles.searchRow}>
+          <Ionicons name="search" size={16} color={Colors.textMuted} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Find in playlist"
+            placeholderTextColor={Colors.textMuted}
+            style={styles.searchInput}
+            autoFocus
+          />
+          <Pressable onPress={() => { setQuery(''); setIsSearching(false); }} hitSlop={8}>
+            <Text style={styles.searchCancel}>Cancel</Text>
           </Pressable>
         </View>
-      </>
-    );
-  };
+      ) : null}
 
-  const renderEmpty = () => (
-    <View style={styles.emptyState}>
-      <View style={styles.emptyIconWrap}>
-        <View style={[StyleSheet.absoluteFillObject, styles.emptyRingOuter]} />
-        <View style={[StyleSheet.absoluteFillObject, styles.emptyRingInner]} />
-        <Ionicons name="musical-notes-outline" size={56} color="rgba(210,187,255,0.8)" />
+      <View style={styles.actionsRow} onLayout={(e) => setAnchorY(e.nativeEvent.layout.y)}>
+        <Pressable onPress={goToSearch} style={styles.actionIcon} hitSlop={6} accessibilityLabel="Add songs">
+          <Ionicons name="add-circle-outline" size={24} color={Colors.textSubdued} />
+        </Pressable>
+        {songs.length > 0 ? (
+          <>
+            <Pressable onPress={() => setIsSearching(true)} style={styles.actionIcon} hitSlop={6} accessibilityLabel="Search in playlist">
+              <Ionicons name="search" size={22} color={Colors.textSubdued} />
+            </Pressable>
+            <Pressable onPress={cycleSort} style={styles.sortButton} hitSlop={6}>
+              <Ionicons name="swap-vertical" size={16} color={Colors.textSubdued} />
+              <Text style={styles.sortText}>{SORT_LABELS[sort]}</Text>
+            </Pressable>
+          </>
+        ) : null}
+        <Pressable onPress={() => setIsMenuVisible(true)} style={styles.actionIcon} hitSlop={6} accessibilityLabel="More options">
+          <Ionicons name="ellipsis-horizontal" size={22} color={Colors.textSubdued} />
+        </Pressable>
+        <View style={styles.flex} />
+        {songs.length > 0 ? (
+          <>
+            <Pressable onPress={toggleShuffle} style={styles.actionIcon} hitSlop={6} accessibilityLabel="Shuffle">
+              <Ionicons name="shuffle" size={26} color={shuffleMode === 'off' ? Colors.textSubdued : Colors.secondary} />
+            </Pressable>
+            <PlayButtonSlot />
+          </>
+        ) : null}
       </View>
-      <Text style={styles.emptyTitle}>This playlist is empty</Text>
-      <Text style={styles.emptySubtitle}>Add your first song to get started</Text>
-      <Pressable
-        onPress={() => (navigation as any).navigate('Search')}
-        style={({ pressed }) => [styles.emptyBtn, pressed && styles.cardPressed]}
-      >
-        <Ionicons name="add" size={20} color="#ede0ff" />
-        <Text style={styles.emptyBtnText}>Add Songs</Text>
-      </Pressable>
+    </View>
+  );
+
+  const footer = (
+    <View style={styles.recsSection}>
+      {songs.length > 0 ? (
+        <>
+          <View style={styles.recsHeader}>
+            <View>
+              <Text style={styles.recsTitle}>Recommended songs</Text>
+              <Text style={styles.recsSubtitle}>Based on what's in this playlist</Text>
+            </View>
+            <Pressable onPress={() => setRecsSeed((n) => n + 1)} hitSlop={8} style={styles.refreshButton}>
+              <Text style={styles.refreshText}>Refresh</Text>
+            </Pressable>
+          </View>
+          {recsQuery.isLoading ? (
+            <ActivityIndicator color={Colors.primary} style={styles.recsLoader} />
+          ) : (
+            recommendations.map((song) => (
+              <View key={song.youtube_id} style={styles.recRow}>
+                <Pressable
+                  style={styles.recMain}
+                  onPress={() =>
+                    void playback
+                      .playSongs([song, ...recommendations.filter((r) => r !== song)], 0, {
+                        type: 'radio',
+                        name: `Recommended for ${playlist?.name ?? 'playlist'}`,
+                        id: `recs-${playlistId}`,
+                      })
+                      .then(() => navigation.navigate('NowPlaying'))
+                      .catch(() => Toast.show({ type: 'error', text1: 'Could not play this track' }))
+                  }
+                >
+                  <Image source={{ uri: song.thumbnail_url ?? undefined }} style={styles.recThumb} contentFit="cover" />
+                  <View style={styles.recMeta}>
+                    <Text numberOfLines={1} style={styles.recTitle}>{song.title}</Text>
+                    <Text numberOfLines={1} style={styles.recSubtitle}>{song.channel_name}</Text>
+                  </View>
+                </Pressable>
+                <Pressable onPress={() => void handleAddRecommendation(song)} hitSlop={8} style={styles.recAdd} accessibilityLabel={`Add ${song.title}`}>
+                  <Ionicons name="add-circle-outline" size={26} color={Colors.onBackground} />
+                </Pressable>
+              </View>
+            ))
+          )}
+        </>
+      ) : (
+        <View style={styles.emptyState}>
+          <Ionicons name="musical-notes-outline" size={48} color={Colors.primaryLight} />
+          <Text style={styles.emptyTitle}>Let's find something for your playlist</Text>
+          <Pressable onPress={goToSearch} style={styles.emptyButton}>
+            <Text style={styles.emptyButtonText}>Find songs</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 
   if (playlistQuery.isLoading) {
     return (
       <View style={styles.loadingState}>
-        <ActivityIndicator color="#7C3AED" size="large" />
+        <ActivityIndicator color={Colors.primary} size="large" />
       </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <Pressable
-        onPress={() => navigation.goBack()}
-        style={({ pressed }) => [styles.backButton, pressed && styles.cardPressed]}
-      >
-        <Ionicons name="chevron-back" size={22} color="#e2e2e2" />
-      </Pressable>
-
-      <Pressable
-        onPress={handleDeletePlaylist}
-        style={({ pressed }) => [styles.overflowButton, pressed && styles.cardPressed]}
-      >
-        <Ionicons name="ellipsis-horizontal" size={20} color="#e2e2e2" />
-      </Pressable>
-
+    <View style={styles.container}>
       <DraggableFlatList
-        data={songs}
+        data={visibleSongs}
         keyExtractor={(item) => item.id}
         onDragEnd={({ data }) => void handleReorder(data)}
         renderItem={renderSongItem}
-        contentContainerStyle={styles.list}
-        ListHeaderComponent={renderHeader}
-        ListEmptyComponent={renderEmpty}
+        onScrollOffsetChange={onScrollOffset}
+        ListHeaderComponent={header}
+        ListFooterComponent={footer}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
       />
 
-      <SongOptionsSheet
-        isVisible={!!optionsSong}
-        onClose={() => setOptionsSong(null)}
-        thumbnail={optionsSong?.thumbnail_url ?? undefined}
-        title={optionsSong?.title ?? ''}
-        channel={optionsSong?.channel_name || 'Unknown channel'}
-        isLiked={optionsSong ? likedIds.has(optionsSong.id) : false}
-        onLike={() => {
-          if (optionsSong) void handleToggleLikeForSong(optionsSong);
-        }}
-        onAddToPlaylist={() => setIsPlaylistPickerVisible(true)}
-        onShare={handleShareOptionsSong}
+      <CollapsingTopBar
+        scrollY={scrollY}
+        title={playlist?.name ?? 'Playlist'}
+        background={palette.muted}
+        threshold={insets.top + 300}
+        onBack={() => navigation.goBack()}
       />
+      {songs.length > 0 ? (
+        <StickyPlayButton scrollY={scrollY} anchorY={anchorY} isPlaying={isThisPlaying} onPress={handleHeaderPlay} />
+      ) : null}
 
-      <AnimatedBottomSheet
-        isVisible={isPlaylistPickerVisible}
-        onClose={() => setIsPlaylistPickerVisible(false)}
-      >
-        <View style={styles.pickerContainer}>
-          <Text style={styles.pickerTitle}>Add To Playlist</Text>
-          <FlatList
-            data={otherPlaylists}
-            keyExtractor={(item) => item.id}
-            style={{ height: SCREEN_HEIGHT * 0.6 }}
-            renderItem={({ item }) => (
-              <Pressable
-                onPress={() => void handleAddOptionsSongToPlaylist(item)}
-                style={styles.pickerRow}
-              >
-                <Text style={styles.pickerRowTitle}>{item.name}</Text>
-                <Ionicons name="add-circle-outline" size={22} color="#e2e2e2" />
-              </Pressable>
-            )}
-            ListEmptyComponent={
-              <Text style={styles.pickerEmptyText}>
-                {otherPlaylistsQuery.isLoading ? 'Loading playlists...' : 'No other playlists yet.'}
-              </Text>
-            }
+      <AnimatedBottomSheet isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)}>
+        <View style={styles.menu}>
+          <View style={styles.menuHeader}>
+            <PlaylistCover thumbnails={covers} size={48} />
+            <Text numberOfLines={1} style={styles.menuTitle}>{playlist?.name}</Text>
+          </View>
+          <MenuRow
+            icon="create-outline"
+            label="Rename"
+            onPress={() => {
+              setIsMenuVisible(false);
+              setNameDraft(playlist?.name ?? '');
+              setIsEditingName(true);
+            }}
           />
+          <MenuRow
+            icon={isPinned ? 'pin' : 'pin-outline'}
+            label={isPinned ? 'Unpin playlist' : 'Pin playlist'}
+            onPress={() => {
+              useSettingsStore.getState().togglePinnedPlaylist(playlistId);
+              setIsMenuVisible(false);
+              Toast.show({ type: 'success', text1: isPinned ? 'Unpinned' : 'Pinned to the top of Your Library' });
+            }}
+          />
+          <MenuRow
+            icon="add-circle-outline"
+            label="Add songs"
+            onPress={() => {
+              setIsMenuVisible(false);
+              goToSearch();
+            }}
+          />
+          <MenuRow icon="trash-outline" label="Delete playlist" destructive onPress={handleDeletePlaylist} />
         </View>
       </AnimatedBottomSheet>
-    </SafeAreaView>
+    </View>
+  );
+}
+
+function MenuRow({
+  icon,
+  label,
+  onPress,
+  destructive,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  label: string;
+  onPress: () => void;
+  destructive?: boolean;
+}) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}>
+      <Ionicons name={icon} size={22} color={destructive ? Colors.error : 'rgba(255,255,255,0.85)'} />
+      <Text style={[styles.menuLabel, destructive && { color: Colors.error }]}>{label}</Text>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#0c0f0f',
+    backgroundColor: Colors.background,
+    flex: 1,
+  },
+  flex: {
     flex: 1,
   },
   loadingState: {
     alignItems: 'center',
-    backgroundColor: '#0c0f0f',
+    backgroundColor: Colors.background,
     flex: 1,
     justifyContent: 'center',
   },
-  backButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(26,28,28,0.75)',
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 40,
-    justifyContent: 'center',
-    left: 16,
-    position: 'absolute',
-    top: 8,
-    width: 40,
-    zIndex: 10,
-  },
-  overflowButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(26,28,28,0.75)',
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 40,
-    justifyContent: 'center',
-    position: 'absolute',
-    right: 16,
-    top: 8,
-    width: 40,
-    zIndex: 10,
-  },
-  // ── Hero ──────────────────────────────────────────────────────────────────
   hero: {
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    marginHorizontal: -20,  // break out of list's contentContainerStyle padding
-    minHeight: 380,
-    overflow: 'hidden',
-    paddingTop: 56,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
   },
-  heroBgImage: {
-    transform: [{ scale: 1.1 }],  // avoid blur edge artefacts
-  },
-  heroBgFallback: {
-    backgroundColor: '#1a1c1c',
-  },
-  heroContent: {
-    alignItems: 'center',
-    paddingBottom: 28,
-    paddingHorizontal: 20,
-    width: '100%',
-  },
-  heroArtWrap: {
-    alignItems: 'center',
-    backgroundColor: '#333535',
-    borderRadius: 12,
-    elevation: 20,
-    height: 192,
-    justifyContent: 'center',
+  heroCover: {
     marginBottom: 20,
-    overflow: 'hidden',
     shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 10 },
+    shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.5,
-    shadowRadius: 20,
-    width: 192,
+    shadowRadius: 16,
   },
   heroTitle: {
     color: '#FFFFFF',
-    fontSize: 32,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-    marginBottom: 8,
+    fontSize: TypeScale.heading,
+    fontWeight: '700',
     textAlign: 'center',
-  },
-  heroSubtitle: {
-    color: 'rgba(204,195,216,0.9)',
-    fontSize: 14,
-    fontWeight: '500',
-    letterSpacing: 0.15,
-    marginBottom: 24,
-  },
-  heroActions: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 16,
-  },
-  playBtn: {
-    alignItems: 'center',
-    backgroundColor: '#7C3AED',
-    borderRadius: 999,
-    elevation: 8,
-    height: 56,
-    justifyContent: 'center',
-    shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    width: 56,
-  },
-  shuffleBtn: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 8,
-    height: 48,
-    paddingHorizontal: 24,
-  },
-  shuffleBtnText: {
-    color: '#e2e2e2',
-    fontSize: 18,
-    fontWeight: '600',
   },
   nameInput: {
-    borderBottomColor: 'rgba(255,255,255,0.4)',
-    borderBottomWidth: 1,
+    borderBottomColor: Colors.primary,
+    borderBottomWidth: 2,
     color: '#FFFFFF',
-    fontSize: 32,
-    fontWeight: '800',
-    marginBottom: 8,
+    fontSize: TypeScale.heading,
+    fontWeight: '700',
     minWidth: 200,
-    paddingBottom: 4,
+    paddingVertical: 4,
     textAlign: 'center',
   },
-  // ── Quick-action chips row ──────────────────────────────────────────────────
-  chipsRow: {
+  heroDescription: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  heroMeta: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+    marginTop: 6,
+  },
+  searchRow: {
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceHighlight,
+    borderRadius: 8,
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 8,
-    paddingVertical: 12,
+    marginBottom: 4,
+    marginHorizontal: 16,
+    paddingHorizontal: 12,
   },
-  chip: {
-    alignItems: 'center',
-    backgroundColor: '#121414',
-    borderColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 16,
+  searchInput: {
+    color: Colors.onBackground,
+    flex: 1,
+    fontSize: TypeScale.small,
     paddingVertical: 8,
   },
-  chipText: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 12,
+  searchCancel: {
+    color: Colors.onBackground,
+    fontSize: TypeScale.small,
     fontWeight: '600',
   },
-  // ── Song list ──────────────────────────────────────────────────────────────
-  list: {
-    paddingBottom: 120,
-    paddingHorizontal: 20,
-  },
-  songRow: {
+  actionsRow: {
     alignItems: 'center',
-    borderRadius: 8,
+    flexDirection: 'row',
+    gap: 6,
+    height: 56,
+    marginVertical: 8,
+    paddingHorizontal: 16,
+  },
+  actionIcon: {
+    alignItems: 'center',
+    height: 40,
+    justifyContent: 'center',
+    width: 36,
+  },
+  sortButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 4,
+  },
+  sortText: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+    fontWeight: '600',
+  },
+  recsSection: {
+    paddingHorizontal: 16,
+    paddingTop: 24,
+  },
+  recsHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  recsTitle: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.title,
+    fontWeight: '700',
+  },
+  recsSubtitle: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
+    marginTop: 2,
+  },
+  refreshButton: {
+    borderColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  refreshText: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.small,
+    fontWeight: '600',
+  },
+  recsLoader: {
+    marginVertical: 24,
+  },
+  recRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 6,
+  },
+  recMain: {
+    alignItems: 'center',
+    flex: 1,
     flexDirection: 'row',
     gap: 12,
-    marginBottom: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
   },
-  songRowActive: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    opacity: 0.9,
-  },
-  songThumbWrap: {
-    alignItems: 'center',
-    backgroundColor: '#333535',
+  recThumb: {
     borderRadius: 8,
-    flexShrink: 0,
-    height: 44,
-    justifyContent: 'center',
-    overflow: 'hidden',
-    width: 44,
+    height: 48,
+    width: 48,
   },
-  nowPlayingOverlay: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-  },
-  songMeta: {
+  recMeta: {
     flex: 1,
     minWidth: 0,
   },
-  songTitle: {
-    color: '#e2e2e2',
-    fontSize: 18,
-    fontWeight: '600',
-    lineHeight: 24,
+  recTitle: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.body,
   },
-  songTitleActive: {
-    color: '#7C3AED',
-  },
-  songSubtitle: {
-    color: 'rgba(204,195,216,0.85)',
-    fontSize: 14,
-    fontWeight: '500',
+  recSubtitle: {
+    color: Colors.textSubdued,
+    fontSize: TypeScale.small,
     marginTop: 2,
   },
-  songDuration: {
-    color: 'rgba(204,195,216,0.6)',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  songOptionsBtn: {
+  recAdd: {
     alignItems: 'center',
+    height: 40,
     justifyContent: 'center',
-    padding: 4,
+    width: 40,
   },
-  removeButton: {
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    backgroundColor: '#C62828',
-    borderRadius: 8,
-    justifyContent: 'center',
-    marginBottom: 4,
-    paddingHorizontal: 20,
-  },
-  // ── Empty state ────────────────────────────────────────────────────────────
   emptyState: {
     alignItems: 'center',
-    paddingBottom: 60,
-    paddingHorizontal: 20,
-    paddingTop: 80,
-  },
-  emptyIconWrap: {
-    alignItems: 'center',
-    backgroundColor: '#1a1c1c',
-    borderColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 128,
-    justifyContent: 'center',
-    marginBottom: 32,
-    width: 128,
-  },
-  emptyRingOuter: {
-    borderColor: 'rgba(124,58,237,0.2)',
-    borderRadius: 999,
-    borderWidth: 1,
-    opacity: 0.5,
-    transform: [{ scale: 1.15 }],
-  },
-  emptyRingInner: {
-    borderColor: 'rgba(124,58,237,0.1)',
-    borderRadius: 999,
-    borderWidth: 1,
-    opacity: 0.3,
-    transform: [{ scale: 1.3 }],
+    paddingTop: 32,
   },
   emptyTitle: {
-    color: '#e2e2e2',
-    fontSize: 24,
+    color: '#FFFFFF',
+    fontSize: TypeScale.title,
     fontWeight: '700',
-    marginBottom: 8,
+    marginTop: 16,
     textAlign: 'center',
   },
-  emptySubtitle: {
-    color: 'rgba(204,195,216,0.7)',
-    fontSize: 16,
-    fontWeight: '400',
-    lineHeight: 24,
-    marginBottom: 32,
-    textAlign: 'center',
-  },
-  emptyBtn: {
-    alignItems: 'center',
-    backgroundColor: '#7C3AED',
+  emptyButton: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 999,
-    elevation: 8,
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 32,
+    marginTop: 20,
+    paddingHorizontal: 28,
     paddingVertical: 12,
-    shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
   },
-  emptyBtnText: {
-    color: '#ede0ff',
-    fontSize: 18,
+  emptyButtonText: {
+    color: '#000000',
+    fontSize: TypeScale.body,
+    fontWeight: '700',
+  },
+  menu: {
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+  },
+  menuHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 8,
+  },
+  menuTitle: {
+    color: '#FFFFFF',
+    flex: 1,
+    fontSize: TypeScale.body,
     fontWeight: '600',
   },
-  // ── Add-to-playlist picker sheet ─────────────────────────────────────────────
-  pickerContainer: {
-    minHeight: 200,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-  },
-  pickerTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 12,
-  },
-  pickerRow: {
+  menuRow: {
     alignItems: 'center',
     borderRadius: 8,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 8,
+    gap: 16,
+    paddingHorizontal: 4,
     paddingVertical: 14,
   },
-  pickerRowTitle: {
-    color: '#e2e2e2',
-    fontSize: 16,
-    fontWeight: '600',
+  menuRowPressed: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
   },
-  pickerEmptyText: {
-    color: 'rgba(204,195,216,0.7)',
-    fontSize: 14,
-    paddingVertical: 20,
-    textAlign: 'center',
-  },
-  cardPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.97 }],
+  menuLabel: {
+    color: '#FFFFFF',
+    fontSize: TypeScale.body,
   },
 });

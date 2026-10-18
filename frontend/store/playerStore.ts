@@ -1,13 +1,12 @@
-import { NativeModules } from 'react-native';
 import { create } from 'zustand';
 
 export type Track = {
-  id: string;
+  id: string;               // catalogue UUID once known, otherwise the YouTube ID
   title: string;
   artist: string;
   album: string;
   artwork: string;
-  url: string;
+  url: string;              // '' until the stream URL has been resolved
   source: 'youtube';
   youtubeId?: string;
   channelName?: string;
@@ -15,353 +14,79 @@ export type Track = {
   youtube_id?: string;
   channel_name?: string;
   thumbnail_url?: string;
+  durationSec?: number;
+  queueId?: string;         // unique per queue entry (the same song can appear twice)
+  isRecommendation?: boolean; // added by Smart Shuffle
+  isAutoplay?: boolean;       // appended by Autoplay when the context ran out
 };
 
 export type RepeatModeValue = 'off' | 'one' | 'all';
+export type ShuffleMode = 'off' | 'shuffle' | 'smart';
+
+export type PlaybackContext = {
+  type: 'playlist' | 'liked' | 'search' | 'channel' | 'home' | 'radio' | 'queue';
+  name: string;
+  id?: string;
+};
+
+export type SleepTimerState = {
+  endsAt: number | null;    // epoch ms, for minute-based timers
+  endOfTrack: boolean;      // pause when the current track finishes
+};
 
 type PlayerStore = {
   currentTrack: Track | null;
   isPlaying: boolean;
+  isLoading: boolean;
+  // The context being played (playlist, liked songs, radio…) — played and upcoming.
   queue: Track[];
+  currentIndex: number;
+  // "Next in queue" — user-queued tracks that play before the context continues.
+  userQueue: Track[];
+  playingFromUserQueue: boolean;
+  context: PlaybackContext | null;
   repeatMode: RepeatModeValue;
-  shuffle: boolean;
-  // Pre-shuffle queue order, kept so toggling shuffle back off can restore it.
+  shuffleMode: ShuffleMode;
+  // Pre-shuffle context order, so turning shuffle off restores it.
   originalQueue: Track[] | null;
   currentPosition: number;
   duration: number;
+  playbackRate: number;
+  sleepTimer: SleepTimerState;
   showReconnecting: boolean;
-  setCurrentTrack: (track: Track | null) => void;
-  togglePlay: () => Promise<void>;
-  setQueue: (queue: Track[]) => Promise<void>;
-  addToQueue: (track: Track) => Promise<void>;
-  reorderQueue: (queue: Track[]) => Promise<void>;
-  removeFromQueue: (trackId: string) => Promise<void>;
-  setRepeat: (repeatMode: RepeatModeValue) => Promise<void>;
-  toggleShuffle: () => Promise<void>;
   setPosition: (position: number) => void;
   setDuration: (duration: number) => void;
   setShowReconnecting: (show: boolean) => void;
 };
 
-type TrackPlayerModule = typeof import('react-native-track-player');
-
-let hasInitializedTrackPlayerSync = false;
-
-const normalizeTrack = (value: unknown): Track | null => {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-
-  const rawTrack = value as Partial<Track>;
-
-  if (
-    typeof rawTrack.id !== 'string' ||
-    typeof rawTrack.title !== 'string' ||
-    typeof rawTrack.artist !== 'string' ||
-    typeof rawTrack.album !== 'string' ||
-    typeof rawTrack.artwork !== 'string' ||
-    typeof rawTrack.url !== 'string' ||
-    rawTrack.source !== 'youtube'
-  ) {
-    return null;
-  }
-
-  return {
-    id: rawTrack.id,
-    title: rawTrack.title,
-    artist: rawTrack.artist,
-    album: rawTrack.album,
-    artwork: rawTrack.artwork,
-    url: rawTrack.url,
-    source: rawTrack.source,
-    youtubeId: typeof rawTrack.youtubeId === 'string' ? rawTrack.youtubeId : undefined,
-    channelName: typeof rawTrack.channelName === 'string' ? rawTrack.channelName : undefined,
-    thumbnailUrl: typeof rawTrack.thumbnailUrl === 'string' ? rawTrack.thumbnailUrl : undefined,
-    youtube_id: typeof rawTrack.youtube_id === 'string' ? rawTrack.youtube_id : undefined,
-    channel_name: typeof rawTrack.channel_name === 'string' ? rawTrack.channel_name : undefined,
-    thumbnail_url: typeof rawTrack.thumbnail_url === 'string' ? rawTrack.thumbnail_url : undefined,
-  };
-};
-
-const mapRepeatModeToNative = (repeatMode: RepeatModeValue, module: TrackPlayerModule) => {
-  switch (repeatMode) {
-    case 'one':
-      return module.RepeatMode.Track;
-    case 'all':
-      return module.RepeatMode.Queue;
-    default:
-      return module.RepeatMode.Off;
-  }
-};
-
-const mapPlaybackStateToPlaying = (
-  playbackState: Awaited<ReturnType<TrackPlayerModule['default']['getPlaybackState']>>,
-  module: TrackPlayerModule
-) => playbackState.state === module.State.Playing;
-
-const loadTrackPlayerModule = (): TrackPlayerModule | null => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  if ((NativeModules as any).TrackPlayer == null) return null;
-  try {
-    return require('react-native-track-player') as TrackPlayerModule;
-  } catch {
-    return null;
-  }
-};
-
-export const usePlayerStore = create<PlayerStore>((set, get) => ({
+export const usePlayerStore = create<PlayerStore>((set) => ({
   currentTrack: null,
   isPlaying: false,
+  isLoading: false,
   queue: [],
+  currentIndex: -1,
+  userQueue: [],
+  playingFromUserQueue: false,
+  context: null,
   repeatMode: 'off',
-  shuffle: false,
+  shuffleMode: 'off',
   originalQueue: null,
   currentPosition: 0,
   duration: 0,
+  playbackRate: 1,
+  sleepTimer: { endsAt: null, endOfTrack: false },
   showReconnecting: false,
-  setCurrentTrack: (track) => set({ currentTrack: track }),
-  togglePlay: async () => {
-    const module = loadTrackPlayerModule();
-    const nextIsPlaying = !get().isPlaying;
-
-    set({ isPlaying: nextIsPlaying });
-
-    if (!module) {
-      return;
-    }
-
-    try {
-      if (nextIsPlaying) {
-        await module.default.play();
-      } else {
-        await module.default.pause();
-      }
-    } catch {
-      set({ isPlaying: !nextIsPlaying });
-    }
-  },
-  setQueue: async (queue) => {
-    set({
-      queue,
-      currentTrack: queue.length > 0 ? get().currentTrack ?? queue[0] : null,
-    });
-
-    const module = loadTrackPlayerModule();
-    if (!module) {
-      return;
-    }
-
-    try {
-      await module.default.setQueue(queue);
-    } catch {
-      // Keep local queue state even if native queue sync is unavailable.
-    }
-  },
-  addToQueue: async (track) => {
-    set((state) => {
-      const nextQueue = [...state.queue, track];
-      return {
-        queue: nextQueue,
-        currentTrack: state.currentTrack ?? track,
-      };
-    });
-
-    const module = loadTrackPlayerModule();
-    if (!module) {
-      return;
-    }
-
-    try {
-      await module.default.add(track);
-    } catch {
-      // Keep local queue state even if native queue sync is unavailable.
-    }
-  },
-  reorderQueue: async (queue) => {
-    const currentTrackId = get().currentTrack?.id ?? null;
-    const nextCurrentTrack =
-      (currentTrackId ? queue.find((track) => track.id === currentTrackId) : null) ?? queue[0] ?? null;
-
-    set({
-      queue,
-      currentTrack: nextCurrentTrack,
-    });
-
-    const module = loadTrackPlayerModule();
-    if (!module) {
-      return;
-    }
-
-    try {
-      await module.default.setQueue(queue);
-      if (nextCurrentTrack) {
-        const nextIndex = queue.findIndex((track) => track.id === nextCurrentTrack.id);
-        if (nextIndex >= 0) {
-          await module.default.skip(nextIndex);
-        }
-      }
-    } catch {
-      // Keep local queue state even if native queue sync is unavailable.
-    }
-  },
-  removeFromQueue: async (trackId) => {
-    const currentTrackId = get().currentTrack?.id ?? null;
-    const nextQueue = get().queue.filter((track) => track.id !== trackId);
-    const nextCurrentTrack =
-      currentTrackId === trackId
-        ? nextQueue[0] ?? null
-        : nextQueue.find((track) => track.id === currentTrackId) ?? nextQueue[0] ?? null;
-
-    set({
-      queue: nextQueue,
-      currentTrack: nextCurrentTrack,
-    });
-
-    const module = loadTrackPlayerModule();
-    if (!module) {
-      return;
-    }
-
-    try {
-      const queue = await module.default.getQueue();
-      const index = queue.findIndex((track) => track.id === trackId);
-      if (index >= 0) {
-        await module.default.remove(index);
-      }
-      if (nextCurrentTrack) {
-        const nextIndex = nextQueue.findIndex((track) => track.id === nextCurrentTrack.id);
-        if (nextIndex >= 0) {
-          await module.default.skip(nextIndex);
-        }
-      }
-    } catch {
-      // Keep local queue state even if native queue sync is unavailable.
-    }
-  },
-  setRepeat: async (repeatMode) => {
-    set({ repeatMode });
-
-    const module = loadTrackPlayerModule();
-    if (!module) {
-      return;
-    }
-
-    try {
-      await module.default.setRepeatMode(mapRepeatModeToNative(repeatMode, module));
-    } catch {
-      // Keep local repeat state even if native repeat sync is unavailable.
-    }
-  },
-  // Shuffles the upcoming portion of the queue (current track stays put so
-  // playback doesn't jump), and restores the pre-shuffle order when turned
-  // back off. Also mirrors the reorder into the native queue when available,
-  // since RNTP has no built-in shuffle mode of its own.
-  toggleShuffle: async () => {
-    const { shuffle, queue, currentTrack, originalQueue } = get();
-    const nextShuffle = !shuffle;
-
-    let nextQueue: Track[];
-    if (nextShuffle) {
-      const currentIndex = currentTrack ? queue.findIndex((t) => t.id === currentTrack.id) : -1;
-      const played = currentIndex >= 0 ? queue.slice(0, currentIndex + 1) : [];
-      const upcoming = currentIndex >= 0 ? queue.slice(currentIndex + 1) : [...queue];
-      const shuffledUpcoming = [...upcoming].sort(() => Math.random() - 0.5);
-      nextQueue = [...played, ...shuffledUpcoming];
-    } else {
-      nextQueue = originalQueue ?? queue;
-    }
-
-    set({
-      shuffle: nextShuffle,
-      queue: nextQueue,
-      originalQueue: nextShuffle ? queue : null,
-    });
-
-    const module = loadTrackPlayerModule();
-    if (!module) {
-      return;
-    }
-
-    try {
-      const currentIndex = currentTrack
-        ? nextQueue.findIndex((t) => t.id === currentTrack.id)
-        : -1;
-      const upcoming = currentIndex >= 0 ? nextQueue.slice(currentIndex + 1) : nextQueue;
-      await module.default.removeUpcomingTracks();
-      if (upcoming.length > 0) {
-        await module.default.add(upcoming);
-      }
-    } catch {
-      // Keep local shuffle state even if native queue sync is unavailable.
-    }
-  },
   setPosition: (currentPosition) => set({ currentPosition }),
   setDuration: (duration) => set({ duration }),
   setShowReconnecting: (show) => set({ showReconnecting: show }),
 }));
 
-const initializeTrackPlayerSync = () => {
-  if (hasInitializedTrackPlayerSync) {
-    return;
-  }
-
-  hasInitializedTrackPlayerSync = true;
-
-  const module = loadTrackPlayerModule();
-  if (!module) {
-    return;
-  }
-
-  const { Event, State } = module;
-
-  const hydrateFromTrackPlayer = async () => {
-    try {
-      const [playbackState, progress, activeTrack, queue] = await Promise.all([
-        module.default.getPlaybackState(),
-        module.default.getProgress(),
-        module.default.getActiveTrack(),
-        module.default.getQueue(),
-      ]);
-
-      usePlayerStore.setState({
-        isPlaying: mapPlaybackStateToPlaying(playbackState, module),
-        currentPosition: progress.position,
-        duration: progress.duration,
-        currentTrack: normalizeTrack(activeTrack),
-        queue: queue.map(normalizeTrack).filter((track): track is Track => track !== null),
-      });
-    } catch {
-      // Ignore hydration failures when the native module is unavailable or not set up yet.
-    }
+/** Tracks that will play after the current one, in order (user queue first). */
+export function selectUpNext(state: Pick<PlayerStore, 'queue' | 'currentIndex' | 'userQueue'>) {
+  return {
+    userQueue: state.userQueue,
+    contextUpcoming: state.queue.slice(state.currentIndex + 1),
   };
-
-  void hydrateFromTrackPlayer();
-
-  module.default.addEventListener(Event.PlaybackState, (event) => {
-    usePlayerStore.setState({
-      isPlaying: event.state === State.Playing,
-    });
-  });
-
-  module.default.addEventListener(Event.PlaybackProgressUpdated, (event) => {
-    usePlayerStore.setState({
-      currentPosition: event.position,
-      duration: event.duration,
-    });
-  });
-
-  module.default.addEventListener(Event.PlaybackActiveTrackChanged, (event) => {
-    const nextTrack =
-      normalizeTrack(event.track) ??
-      (typeof event.index === 'number' ? usePlayerStore.getState().queue[event.index] ?? null : null);
-
-    usePlayerStore.setState({
-      currentTrack: nextTrack,
-      currentPosition: 0,
-    });
-  });
-};
-
-initializeTrackPlayerSync();
+}
 
 export const usePlayer = usePlayerStore;

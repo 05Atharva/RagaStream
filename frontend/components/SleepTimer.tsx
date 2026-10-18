@@ -1,248 +1,145 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Toast from 'react-native-toast-message';
 import AnimatedBottomSheet from './AnimatedBottomSheet';
-import { pausePlayback } from '../services/audioPlayer';
 import { usePlayerStore } from '../store/playerStore';
+import * as playback from '../services/playbackController';
+import { successHaptic } from '../services/haptics';
+import { Colors, TypeScale } from '../constants/theme';
 
-const TIMER_OPTIONS = [
-  { label: '15 min', value: 15 },
-  { label: '30 min', value: 30 },
-  { label: '45 min', value: 45 },
-  { label: '60 min', value: 60 },
-] as const;
+const TIMER_OPTIONS: Array<{ label: string; value: number | 'endOfTrack' }> = [
+  { label: '5 minutes', value: 5 },
+  { label: '10 minutes', value: 10 },
+  { label: '15 minutes', value: 15 },
+  { label: '30 minutes', value: 30 },
+  { label: '45 minutes', value: 45 },
+  { label: '1 hour', value: 60 },
+  { label: 'End of track', value: 'endOfTrack' },
+];
 
 type SleepTimerProps = {
   isVisible: boolean;
   onClose: () => void;
 };
 
-export default function SleepTimer({ isVisible, onClose }: SleepTimerProps) {
-  const [remainingMs, setRemainingMs] = useState<number | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+function formatRemaining(ms: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}` : `${m}:${s.toString().padStart(2, '0')}`;
+}
 
-  const clearTimers = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-    setRemainingMs(null);
-  }, []);
+/**
+ * Live label for an active sleep timer ("12:34" or "End of track"), or null.
+ * The timer itself lives in playbackController, so it survives this screen closing.
+ */
+export function useSleepTimerLabel(): string | null {
+  const sleepTimer = usePlayerStore((s) => s.sleepTimer);
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    return () => {
-      clearTimers();
-    };
-  }, [clearTimers]);
+    if (!sleepTimer.endsAt) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [sleepTimer.endsAt]);
 
-  const startTimer = (minutes: number) => {
-    clearTimers();
+  if (sleepTimer.endOfTrack) return 'End of track';
+  if (sleepTimer.endsAt) return formatRemaining(sleepTimer.endsAt - now);
+  return null;
+}
 
-    const durationMs = minutes * 60 * 1000;
-    const endTime = Date.now() + durationMs;
+export default function SleepTimer({ isVisible, onClose }: SleepTimerProps) {
+  const label = useSleepTimerLabel();
 
-    setRemainingMs(durationMs);
-
-    // Countdown display
-    intervalRef.current = setInterval(() => {
-      const left = endTime - Date.now();
-      if (left <= 0) {
-        setRemainingMs(0);
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      } else {
-        setRemainingMs(left);
-      }
-    }, 1000);
-
-    // Actual pause
-    timerRef.current = setTimeout(async () => {
-      await pausePlayback();
-      usePlayerStore.setState({ isPlaying: false });
-      clearTimers();
-      Toast.show({ type: 'info', text1: 'Sleep timer ended', text2: 'Playback paused' });
-    }, durationMs);
-
-    Toast.show({ type: 'success', text1: `Sleep timer set for ${minutes} minutes` });
+  const choose = (value: number | 'endOfTrack') => {
+    successHaptic();
+    playback.setSleepTimer(value);
     onClose();
-  };
-
-  const cancelTimer = () => {
-    clearTimers();
-    Toast.show({ type: 'info', text1: 'Sleep timer cancelled' });
-    onClose();
-  };
-
-  const isActive = remainingMs !== null && remainingMs > 0;
-
-  const formatRemaining = (ms: number): string => {
-    const totalSeconds = Math.ceil(ms / 1000);
-    const m = Math.floor(totalSeconds / 60);
-    const s = totalSeconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   return (
     <AnimatedBottomSheet isVisible={isVisible} onClose={onClose}>
       <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Sleep Timer</Text>
-          <Pressable
-            hitSlop={8}
-            onPress={onClose}
-            style={styles.closeBtn}
-          >
-            <Ionicons name="close" size={22} color="rgba(204,195,216,0.9)" />
-          </Pressable>
-        </View>
+        <Text style={styles.title}>Sleep timer</Text>
 
-        {isActive ? (
-          /* ── Active: countdown ── */
-          <View style={styles.activeContainer}>
-            <Text style={styles.countdownText}>{formatRemaining(remainingMs)}</Text>
-            <Text style={styles.countdownLabel}>remaining</Text>
+        {label ? (
+          <View style={styles.activeRow}>
+            <Ionicons name="moon" size={18} color={Colors.primaryLight} />
+            <Text style={styles.activeText}>
+              {label === 'End of track' ? 'Stopping at the end of this track' : `${label} left`}
+            </Text>
             <Pressable
-              onPress={cancelTimer}
-              style={({ pressed }) => [styles.cancelButton, pressed && styles.cancelButtonPressed]}
+              onPress={() => {
+                playback.cancelSleepTimer();
+                onClose();
+              }}
+              style={styles.turnOff}
+              hitSlop={8}
             >
-              <Text style={styles.cancelButtonText}>Cancel Timer</Text>
+              <Text style={styles.turnOffText}>Turn off</Text>
             </Pressable>
           </View>
-        ) : (
-          /* ── Idle: options list ── */
-          <View style={styles.optionsList}>
-            {TIMER_OPTIONS.map((option) => (
-              <Pressable
-                key={option.value}
-                onPress={() => startTimer(option.value)}
-                style={({ pressed }) => [styles.optionRow, pressed && styles.optionRowPressed]}
-              >
-                <Text style={styles.optionLabel}>{option.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-        )}
+        ) : null}
 
-        {/* Caption */}
-        <View style={styles.caption}>
-          <Ionicons name="moon-outline" size={14} color="rgba(204,195,216,0.45)" />
-          <Text style={styles.captionText}>Music will fade out and pause automatically.</Text>
-        </View>
+        {TIMER_OPTIONS.map((option) => (
+          <Pressable
+            key={String(option.value)}
+            onPress={() => choose(option.value)}
+            style={({ pressed }) => [styles.optionRow, pressed && styles.optionRowPressed]}
+          >
+            <Text style={styles.optionLabel}>{option.label}</Text>
+          </Pressable>
+        ))}
       </View>
     </AnimatedBottomSheet>
   );
 }
 
-/** Whether sleep timer is currently active. For badge display. */
-export function useSleepTimerActive(): boolean {
-  // This is a simple hook; for true reactivity we'd need a store,
-  // but the component-local state is sufficient for NowPlayingScreen
-  // since SleepTimer is rendered within it.
-  return false;
-}
-
 const styles = StyleSheet.create({
   container: {
     paddingBottom: 16,
-    paddingHorizontal: 20,
-    paddingTop: 4,
-  },
-
-  // ── Header ──
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 20,
+    paddingHorizontal: 16,
   },
   title: {
-    color: '#e2e2e2',
-    fontSize: 24,
+    color: Colors.onBackground,
+    fontSize: TypeScale.title,
     fontWeight: '700',
+    marginBottom: 12,
   },
-  closeBtn: {
+  activeRow: {
     alignItems: 'center',
-    height: 36,
-    justifyContent: 'center',
-    width: 36,
+    backgroundColor: 'rgba(124,58,237,0.15)',
+    borderRadius: 8,
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 8,
+    padding: 12,
   },
-
-  // ── Options list (idle) ──
-  optionsList: {
-    gap: 4,
-  },
-  optionRow: {
-    borderColor: 'transparent',
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-  },
-  optionRowPressed: {
-    backgroundColor: 'rgba(51,53,53,0.35)',
-  },
-  optionLabel: {
-    color: '#e2e2e2',
-    fontSize: 16,
-    fontWeight: '400',
-    lineHeight: 24,
-  },
-
-  // ── Active countdown ──
-  activeContainer: {
-    alignItems: 'center',
-    gap: 8,
-    paddingTop: 8,
-  },
-  countdownText: {
-    color: '#7C3AED',
-    fontSize: 48,
-    fontWeight: '800',
-    letterSpacing: -1,
-  },
-  countdownLabel: {
-    color: 'rgba(204,195,216,0.6)',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  cancelButton: {
-    alignItems: 'center',
-    borderColor: 'rgba(147,0,10,0.35)',
-    borderRadius: 999,
-    borderWidth: 1,
-    marginTop: 24,
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-  },
-  cancelButtonPressed: {
-    opacity: 0.75,
-  },
-  cancelButtonText: {
-    color: '#ffb4ab',
-    fontSize: 16,
+  activeText: {
+    color: Colors.onBackground,
+    flex: 1,
+    fontSize: TypeScale.small,
     fontWeight: '600',
   },
-
-  // ── Caption ──
-  caption: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    justifyContent: 'center',
-    marginTop: 24,
+  turnOff: {
+    paddingHorizontal: 4,
   },
-  captionText: {
-    color: 'rgba(204,195,216,0.45)',
-    fontSize: 13,
-    fontWeight: '500',
+  turnOffText: {
+    color: Colors.primaryLight,
+    fontSize: TypeScale.small,
+    fontWeight: '700',
+  },
+  optionRow: {
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 14,
+  },
+  optionRowPressed: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  optionLabel: {
+    color: Colors.onBackground,
+    fontSize: TypeScale.body,
   },
 });

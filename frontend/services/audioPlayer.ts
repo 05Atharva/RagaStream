@@ -1,36 +1,74 @@
 /**
  * audioPlayer.ts
  *
- * Unified audio playback service.
+ * Low-level audio engine: plays exactly one track at a time and reports
+ * progress / end-of-track / errors. Queue logic lives in playbackController,
+ * so skip, repeat, autoplay and "Play next" behave identically on both paths.
  *
  * ┌─────────────────────────────────────────────────────────┐
  * │  Native build (EAS / expo run:android)                  │
- * │    → react-native-track-player (lock screen, BT, queue) │
+ * │    → react-native-track-player (lock screen, BT)        │
  * │                                                         │
  * │  Expo Go                                                │
  * │    → expo-av Audio.Sound (basic stream playback)        │
  * └─────────────────────────────────────────────────────────┘
  */
-import { NativeModules } from 'react-native';
 import { usePlayerStore, type Track } from '../store/playerStore';
-import TrackPlayer, { isTrackPlayerAvailable } from './trackPlayerShim';
+import TrackPlayer, { Event, State, isTrackPlayerAvailable } from './trackPlayerShim';
 
-// ── expo-av setup (Expo Go only) ──────────────────────────────────────────────
+type EngineHandlers = {
+  onEnded: () => void;
+  onError: (error: unknown) => void;
+};
+
+let handlers: EngineHandlers = { onEnded: () => {}, onError: () => {} };
+
+/** Registered once by playbackController. */
+export function setEngineHandlers(next: EngineHandlers) {
+  handlers = next;
+}
+
+// Incremented on every load so callbacks from a superseded track are ignored.
+let loadToken = 0;
+let endedToken = -1;
+
+const setPlayerState = usePlayerStore.setState;
+
+function notifyEnded(token: number) {
+  if (token !== loadToken || endedToken === token) return;
+  endedToken = token;
+  handlers.onEnded();
+}
+
+// ── react-native-track-player (native builds) ─────────────────────────────────
+if (isTrackPlayerAvailable) {
+  TrackPlayer.addEventListener(Event.PlaybackState, (event) => {
+    setPlayerState({
+      isPlaying: event.state === State.Playing,
+      isLoading: event.state === State.Loading || event.state === State.Buffering,
+    });
+  });
+  TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, (event) => {
+    setPlayerState({ currentPosition: event.position, duration: event.duration });
+  });
+  // RNTP only ever holds the current track, so "queue ended" == "track ended".
+  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => notifyEnded(loadToken));
+  TrackPlayer.addEventListener(Event.PlaybackError, (error) => handlers.onError(error));
+}
+
+// ── expo-av (Expo Go only) ────────────────────────────────────────────────────
 type SoundType = import('expo-av').Audio.Sound;
 type AudioModule = typeof import('expo-av').Audio;
+type AVStatus = import('expo-av').AVPlaybackStatus;
 
 let _Audio: AudioModule | null = null;
-let _currentSound: SoundType | null = null;
-let _isPlaying = false;
-let _onPlaybackStatusUpdate: ((isPlaying: boolean, position: number, duration: number) => void) | null = null;
+let _sound: SoundType | null = null;
 
-// Only initialise expo-av when RNTP is absent (i.e. in Expo Go)
 if (!isTrackPlayerAvailable) {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Audio } = require('expo-av') as typeof import('expo-av');
     _Audio = Audio;
-    // Allow audio to play in silent mode / background
     void Audio.setAudioModeAsync({
       playsInSilentModeIOS: true,
       staysActiveInBackground: true,
@@ -41,170 +79,123 @@ if (!isTrackPlayerAvailable) {
   }
 }
 
-async function _stopCurrentSound() {
-  if (_currentSound) {
-    try {
-      await _currentSound.stopAsync();
-      await _currentSound.unloadAsync();
-    } catch {
-      // ignore
-    }
-    _currentSound = null;
+async function unloadSound() {
+  const sound = _sound;
+  _sound = null;
+  if (!sound) return;
+  try {
+    await sound.stopAsync();
+    await sound.unloadAsync();
+  } catch {
+    // already unloaded
   }
-  _isPlaying = false;
 }
 
-// Expo Go (expo-av) has no built-in queue, so track-completion — repeat one,
-// repeat all, and plain auto-advance — has to be driven manually here.
-// react-native-track-player handles all of this natively, so this is a
-// no-op on that path.
-async function _handleTrackFinished(): Promise<void> {
-  const { repeatMode, queue, currentTrack } = usePlayerStore.getState();
-
-  if (repeatMode === 'one') {
-    if (_currentSound) {
-      await _currentSound.setPositionAsync(0).catch(() => {});
-      await _currentSound.playAsync().catch(() => {});
-    }
+function handleAvStatus(token: number, status: AVStatus) {
+  if (token !== loadToken) return;
+  if (!status.isLoaded) {
+    if (status.error) handlers.onError(status.error);
     return;
   }
-
-  const currentIndex = currentTrack ? queue.findIndex((t) => t.id === currentTrack.id) : -1;
-  let nextIndex = currentIndex + 1;
-  if (nextIndex >= queue.length) {
-    if (repeatMode === 'all' && queue.length > 0) {
-      nextIndex = 0;
-    } else {
-      return;
-    }
-  }
-
-  const nextTrack = queue[nextIndex];
-  if (!nextTrack) return;
-
-  usePlayerStore.setState({ currentTrack: nextTrack, isPlaying: true, currentPosition: 0 });
-  await playTrack(nextTrack);
+  setPlayerState({
+    isPlaying: status.isPlaying,
+    isLoading: status.isBuffering && !status.isPlaying,
+    currentPosition: (status.positionMillis ?? 0) / 1000,
+    duration: (status.durationMillis ?? 0) / 1000,
+  });
+  if (status.didJustFinish) notifyEnded(token);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/** Play a track. Uses RNTP in native builds, expo-av in Expo Go. */
-export async function playTrack(track: Track): Promise<void> {
+/** Load a track (its url must be resolved) and start playing it. */
+export async function loadAndPlay(track: Track, startPosition = 0): Promise<void> {
+  const token = ++loadToken;
+  const rate = usePlayerStore.getState().playbackRate;
+  setPlayerState({ isLoading: true, currentPosition: startPosition, duration: track.durationSec ?? 0 });
+
   if (isTrackPlayerAvailable) {
     await TrackPlayer.reset();
-    await TrackPlayer.add(track);
+    await TrackPlayer.add({ ...track, duration: track.durationSec });
+    if (rate !== 1) await TrackPlayer.setRate(rate);
+    if (startPosition > 0) await TrackPlayer.seekTo(startPosition);
     await TrackPlayer.play();
     return;
   }
 
   if (!_Audio) return;
-
-  await _stopCurrentSound();
-
+  await unloadSound();
   try {
     const { sound } = await _Audio.Sound.createAsync(
       { uri: track.url },
-      { shouldPlay: true, progressUpdateIntervalMillis: 1000 },
-      (status) => {
-        if (status.isLoaded) {
-          _isPlaying = status.isPlaying;
-          if (_onPlaybackStatusUpdate) {
-            _onPlaybackStatusUpdate(
-              status.isPlaying,
-              (status.positionMillis ?? 0) / 1000,
-              (status.durationMillis ?? 0) / 1000
-            );
-          }
-          if (status.didJustFinish) {
-            void _handleTrackFinished();
-          }
-        }
-      }
+      {
+        shouldPlay: true,
+        progressUpdateIntervalMillis: 500,
+        positionMillis: startPosition * 1000,
+        rate,
+        shouldCorrectPitch: false, // "Slowed" should sound slowed, not time-stretched
+      },
+      (status) => handleAvStatus(token, status)
     );
-    _currentSound = sound;
-    _isPlaying = true;
+    if (token !== loadToken) {
+      // A newer track started while this one was loading.
+      await sound.unloadAsync().catch(() => {});
+      return;
+    }
+    _sound = sound;
   } catch (err) {
     console.error('[audioPlayer] Failed to create sound:', err, 'URL:', track.url?.substring(0, 80));
+    setPlayerState({ isLoading: false });
     throw err;
   }
 }
 
-/** Pause current playback. */
 export async function pausePlayback(): Promise<void> {
+  setPlayerState({ isPlaying: false });
   if (isTrackPlayerAvailable) {
     await TrackPlayer.pause();
     return;
   }
-  if (_currentSound) {
-    await _currentSound.pauseAsync().catch(() => {});
-    _isPlaying = false;
-  }
+  await _sound?.pauseAsync().catch(() => {});
 }
 
-/** Resume current playback. */
 export async function resumePlayback(): Promise<void> {
+  setPlayerState({ isPlaying: true });
   if (isTrackPlayerAvailable) {
     await TrackPlayer.play();
     return;
   }
-  if (_currentSound) {
-    await _currentSound.playAsync().catch(() => {});
-    _isPlaying = true;
-  }
-}
-
-/** Toggle play/pause. Returns the new isPlaying state. */
-export async function togglePlayback(): Promise<boolean> {
-  if (isTrackPlayerAvailable) {
-    const state = await TrackPlayer.getPlaybackState();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const playing = (state as any).state === 'playing';
-    if (playing) {
-      await TrackPlayer.pause();
-      return false;
-    }
-    await TrackPlayer.play();
-    return true;
-  }
-
-  if (_isPlaying) {
-    await pausePlayback();
-    return false;
-  }
-  await resumePlayback();
-  return true;
+  await _sound?.playAsync().catch(() => {});
 }
 
 /** Seek to a position in seconds. */
 export async function seekTo(positionSeconds: number): Promise<void> {
+  setPlayerState({ currentPosition: positionSeconds });
   if (isTrackPlayerAvailable) {
     await TrackPlayer.seekTo(positionSeconds);
     return;
   }
-  if (_currentSound) {
-    await _currentSound.setPositionAsync(positionSeconds * 1000).catch(() => {});
+  await _sound?.setPositionAsync(positionSeconds * 1000).catch(() => {});
+}
+
+export async function setRate(rate: number): Promise<void> {
+  setPlayerState({ playbackRate: rate });
+  if (isTrackPlayerAvailable) {
+    await TrackPlayer.setRate(rate);
+    return;
   }
+  await _sound?.setRateAsync(rate, false).catch(() => {});
 }
 
 /** Stop and release all audio resources. */
 export async function stopPlayback(): Promise<void> {
+  loadToken += 1;
+  setPlayerState({ isPlaying: false, isLoading: false });
   if (isTrackPlayerAvailable) {
-    await TrackPlayer.stop();
+    await TrackPlayer.reset();
     return;
   }
-  await _stopCurrentSound();
-}
-
-/** Register a callback for playback progress updates (Expo Go only). */
-export function onPlaybackProgress(
-  cb: (isPlaying: boolean, position: number, duration: number) => void
-) {
-  _onPlaybackStatusUpdate = cb;
-}
-
-/** Whether audio is currently playing. */
-export function getIsPlaying(): boolean {
-  return _isPlaying;
+  await unloadSound();
 }
 
 /** True when running in a native build with full TrackPlayer support. */

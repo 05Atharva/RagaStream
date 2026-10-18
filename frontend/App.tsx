@@ -10,9 +10,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import AppModal from './components/AppModal';
 import AuthGate from './components/AuthGate';
+import SongActionsHost from './components/SongActionsHost';
 import SplashScreen from './screens/SplashScreen';
 import { Colors } from './constants/theme';
 import RootNavigator from './navigation/RootNavigator';
+import { navigationRef } from './navigation/navigationRef';
 import { supabase } from './services/supabase';
 import { useAuthStore } from './store/authStore';
 
@@ -136,12 +138,15 @@ export default function App() {
       <GestureHandlerRootView style={styles.root}>
         <BottomSheetModalProvider>
           <SafeAreaProvider>
-            <NavigationContainer theme={RagaStreamTheme}>
+            <NavigationContainer ref={navigationRef} theme={RagaStreamTheme}>
               <StatusBar style="light" backgroundColor={Colors.background} />
               {!hasHydrated ? (
                 <SplashScreen />
               ) : session ? (
-                <RootNavigator />
+                <>
+                  <RootNavigator />
+                  <SongActionsHost />
+                </>
               ) : (
                 <AuthGate />
               )}
