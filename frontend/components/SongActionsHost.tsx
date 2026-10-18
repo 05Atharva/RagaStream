@@ -1,5 +1,6 @@
-import React from 'react';
-import Toast from 'react-native-toast-message';
+import React, { useRef } from 'react';
+import type { View } from 'react-native';
+import Toast from '../services/toast';
 import SongOptionsSheet, { type SongAction } from './SongOptionsSheet';
 import SaveToSheet from './SaveToSheet';
 import { useSongMenuStore } from '../store/songMenuStore';
@@ -16,6 +17,7 @@ import {
   shareSong,
 } from '../services/libraryActions';
 import { successHaptic } from '../services/haptics';
+import { launchFlight, type Rect } from '../motion/flight';
 
 /**
  * App-level host for the song options sheet and the "Save to" sheet. Screens
@@ -25,6 +27,7 @@ import { successHaptic } from '../services/haptics';
 export default function SongActionsHost() {
   const { song, options, isMenuVisible, isSaveVisible, closeMenu, closeSave, openSave } = useSongMenuStore();
   const isLiked = useIsLiked(song?.youtube_id);
+  const thumbRef = useRef<View>(null);
   const queueContainsTrack = usePlayerStore((state) =>
     Boolean(
       options.queueTrack?.queueId &&
@@ -39,6 +42,21 @@ export default function SongActionsHost() {
   const run = (fn: () => void | Promise<void>) => () => {
     closeMenu();
     setTimeout(() => void fn(), 0);
+  };
+
+  // Queue actions measure the header artwork first, then send it gliding
+  // into the mini player once the sheet is on its way out.
+  const runWithFlight = (fn: () => Promise<void>) => () => {
+    const image = song.thumbnail_url || playback.thumbnailFor(song.youtube_id);
+    const go = (rect: Rect | null) => {
+      closeMenu();
+      setTimeout(() => {
+        if (rect) launchFlight(rect, image);
+        void fn();
+      }, 60);
+    };
+    if (thumbRef.current) thumbRef.current.measureInWindow((x, y, width, height) => go({ x, y, width, height }));
+    else go(null);
   };
 
   const actions: SongAction[] = [
@@ -56,7 +74,7 @@ export default function SongActionsHost() {
       key: 'play-next',
       label: 'Play next',
       icon: 'play-forward-outline',
-      onPress: run(async () => {
+      onPress: runWithFlight(async () => {
         await playback.playNext(song);
         successHaptic();
         Toast.show({ type: 'success', text1: 'Playing next' });
@@ -66,7 +84,7 @@ export default function SongActionsHost() {
       key: 'queue',
       label: 'Add to queue',
       icon: 'list-outline',
-      onPress: run(async () => {
+      onPress: runWithFlight(async () => {
         await playback.addToQueue(song);
         successHaptic();
         Toast.show({ type: 'success', text1: 'Added to queue' });
@@ -162,6 +180,7 @@ export default function SongActionsHost() {
           void setLiked(song, !isLiked);
         }}
         actions={actions}
+        thumbRef={thumbRef}
       />
       <SaveToSheet isVisible={isSaveVisible} onClose={closeSave} song={song} />
     </>

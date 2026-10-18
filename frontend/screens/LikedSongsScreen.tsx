@@ -1,39 +1,35 @@
 import React, { useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import Toast from 'react-native-toast-message';
+import Toast from '../services/toast';
+import PlaylistCover from '../components/PlaylistCover';
+import SkeletonLoader from '../components/SkeletonLoader';
 import SongRow from '../components/SongRow';
-import {
-  CollapsingTopBar,
-  PlayButtonSlot,
-  StickyPlayButton,
-  useCollapsingHeader,
-} from '../components/CollapsingHeader';
+import { CollapsingTopBar, PlayButtonSlot, StickyPlayButton, useCollapsingHeader } from '../components/CollapsingHeader';
+import Chip from '../components/ui/Chip';
+import EmptyState from '../components/ui/EmptyState';
+import IconButton from '../components/ui/IconButton';
+import Text from '../components/ui/Text';
+import Rise from '../motion/Rise';
 import { useLikedSongs, type LikedSong } from '../hooks/useLiked';
+import { useHeroTint } from '../hooks/useArtworkColor';
 import { usePlayerStore } from '../store/playerStore';
 import * as playback from '../services/playbackController';
 import { addSongsToPlaylist, createPlaylist, invalidatePlaylists } from '../services/libraryActions';
 import { tapHaptic } from '../services/haptics';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import { Colors, TypeScale } from '../constants/theme';
+import { Brand, Elevation, Layout, Radius, Space, Type } from '../constants/theme';
+import { makeStyles, useColors } from '../theme/ThemeProvider';
 
 type SortKey = 'recent' | 'title' | 'channel';
-const SORT_LABELS: Record<SortKey, string> = { recent: 'Recently added', title: 'Title', channel: 'Channel' };
+const SORT_LABELS: Record<SortKey, string> = { recent: 'Recently liked', title: 'Title', channel: 'Channel' };
 const LIKED_CONTEXT = { type: 'liked' as const, name: 'Liked Songs', id: 'liked' };
-const HERO_TINT = '#3B1784';
+const LIKED_PALETTE = { accent: Brand.kesar, background: '#4A2410', muted: '#24130A' };
 
 function formatTotal(totalSec: number) {
   const h = Math.floor(totalSec / 3600);
@@ -43,7 +39,10 @@ function formatTotal(totalSec: number) {
 
 export default function LikedSongsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const styles = useStyles();
+  const colors = useColors();
   const insets = useSafeAreaInsets();
+  const tint = useHeroTint(LIKED_PALETTE);
   const { scrollY, onScroll } = useCollapsingHeader();
   const likedQuery = useLikedSongs();
   const likedSongs = likedQuery.data ?? [];
@@ -54,14 +53,14 @@ export default function LikedSongsScreen() {
   const [isSearching, setIsSearching] = useState(false);
   const [sort, setSort] = useState<SortKey>('recent');
   const [anchorY, setAnchorY] = useState(0);
-  const [isMakingPlaylist, setIsMakingPlaylist] = useState(false);
+  const [isMaking, setIsMaking] = useState(false);
 
   const context = usePlayerStore((s) => s.context);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const shuffleMode = usePlayerStore((s) => s.shuffleMode);
-  const isThisPlaying = context?.type === 'liked' && isPlaying;
+  const isThisContext = context?.type === 'liked';
 
-  // "Filter tags": the channels you've liked the most songs from.
+  // Filter tags: the channels you've liked the most songs from.
   const topChannels = useMemo(() => {
     const counts = new Map<string, number>();
     likedSongs.forEach((s) => s.channel_name && counts.set(s.channel_name, (counts.get(s.channel_name) ?? 0) + 1));
@@ -71,49 +70,32 @@ export default function LikedSongsScreen() {
   const visibleSongs = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list: LikedSong[] = likedSongs.filter(
-      (s) =>
-        (!channelFilter || s.channel_name === channelFilter) &&
-        (!q || s.title.toLowerCase().includes(q) || (s.channel_name ?? '').toLowerCase().includes(q))
+      (s) => (!channelFilter || s.channel_name === channelFilter) && (!q || s.title.toLowerCase().includes(q) || (s.channel_name ?? '').toLowerCase().includes(q))
     );
     if (sort === 'title') list = [...list].sort((a, b) => a.title.localeCompare(b.title));
     if (sort === 'channel') list = [...list].sort((a, b) => (a.channel_name ?? '').localeCompare(b.channel_name ?? ''));
     return list;
   }, [likedSongs, channelFilter, query, sort]);
-
-  const totalDuration = useMemo(
-    () => visibleSongs.reduce((sum, s) => sum + (s.duration_sec ?? 0), 0),
-    [visibleSongs]
-  );
+  const totalDuration = useMemo(() => visibleSongs.reduce((sum, s) => sum + (s.duration_sec ?? 0), 0), [visibleSongs]);
 
   const play = async (index: number, shuffle?: boolean) => {
     const song = visibleSongs[index];
     if (!song) return;
-    setLoadingId(shuffle ? null : song.id);
+    if (!shuffle) setLoadingId(song.id);
     try {
       await playback.playSongs(visibleSongs, index, LIKED_CONTEXT, { shuffle });
       navigation.navigate('NowPlaying');
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not start playback' });
+      Toast.show({ type: 'error', text1: "Couldn't start playback", text2: 'Check your connection and try again.' });
     } finally {
       setLoadingId(null);
     }
   };
 
-  const handleHeaderPlay = () => {
-    if (context?.type === 'liked') {
-      void playback.togglePlay();
-      return;
-    }
-    void play(0, shuffleMode !== 'off');
-  };
-
   const toggleShuffle = () => {
     tapHaptic();
-    if (context?.type === 'liked') {
-      void playback.cycleShuffle();
-    } else {
-      usePlayerStore.setState({ shuffleMode: shuffleMode === 'off' ? 'shuffle' : 'off' });
-    }
+    if (isThisContext) void playback.cycleShuffle();
+    else usePlayerStore.setState({ shuffleMode: shuffleMode === 'off' ? 'shuffle' : 'off' });
   };
 
   const cycleSort = () => {
@@ -122,99 +104,71 @@ export default function LikedSongsScreen() {
     setSort(order[(order.indexOf(sort) + 1) % order.length]);
   };
 
-  const handleMakePlaylist = async () => {
-    if (visibleSongs.length === 0 || isMakingPlaylist) return;
-    setIsMakingPlaylist(true);
+  const makePlaylist = async () => {
+    if (!visibleSongs.length || isMaking) return;
+    setIsMaking(true);
     try {
       const date = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
       const name = channelFilter ? `${channelFilter} favourites` : `Liked Songs · ${date}`;
-      const playlist = await createPlaylist(name, `Copied from your Liked Songs on ${date}`);
+      const playlist = await createPlaylist(name, `Made from your Liked Songs on ${date}`);
       await addSongsToPlaylist(visibleSongs.map((s) => s.id), playlist.id);
       invalidatePlaylists([playlist.id]);
-      Toast.show({ type: 'success', text1: `Created "${name}"` });
+      Toast.show({ type: 'success', text1: `Created "${name}"`, text2: `${visibleSongs.length} songs` });
       navigation.navigate('Playlist', { playlistId: playlist.id });
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not create playlist' });
+      Toast.show({ type: 'error', text1: "Couldn't create the playlist" });
     } finally {
-      setIsMakingPlaylist(false);
+      setIsMaking(false);
     }
   };
 
-  const hero = (
+  const header = (
     <View>
-      <LinearGradient
-        colors={[HERO_TINT, '#000000']}
-        locations={[0, 1]}
-        style={[styles.hero, { paddingTop: insets.top + 64 }]}
-      >
-        <Text style={styles.heroTitle}>Liked Songs</Text>
-        <Text style={styles.heroMeta}>
-          {visibleSongs.length} songs{totalDuration > 0 ? ` · ${formatTotal(totalDuration)}` : ''}
-        </Text>
+      <LinearGradient colors={[tint.top, colors.bg]} style={[styles.hero, { paddingTop: insets.top + 64 }]}>
+        <Rise style={Elevation.art}>
+          <PlaylistCover variant="liked" size={148} borderRadius={Radius.lg} />
+        </Rise>
+        <Rise index={1} style={{ gap: Space[2] }}>
+          <Text variant="hero">Liked Songs</Text>
+          <Text variant="mono" color="textSecondary" tabular>
+            {visibleSongs.length} songs{totalDuration > 0 ? `  ·  ${formatTotal(totalDuration)}` : ''}
+          </Text>
+        </Rise>
       </LinearGradient>
 
       {likedSongs.length > 0 ? (
         <>
           {isSearching ? (
             <View style={styles.searchRow}>
-              <Ionicons name="search" size={16} color={Colors.textMuted} />
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="Find in Liked Songs"
-                placeholderTextColor={Colors.textMuted}
-                style={styles.searchInput}
-                autoFocus
-              />
-              <Pressable onPress={() => { setQuery(''); setIsSearching(false); }} hitSlop={8}>
-                <Text style={styles.searchCancel}>Cancel</Text>
+              <Ionicons name="search" size={18} color={colors.textTertiary} />
+              <TextInput value={query} onChangeText={setQuery} placeholder="Find in Liked Songs" placeholderTextColor={colors.textTertiary}
+                style={styles.searchInput} autoFocus accessibilityLabel="Find in Liked Songs" />
+              <Pressable onPress={() => { setQuery(''); setIsSearching(false); }} hitSlop={10} accessibilityLabel="Close search">
+                <Ionicons name="close" size={18} color={colors.textTertiary} />
               </Pressable>
             </View>
           ) : null}
-
           {topChannels.length > 0 ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-              {topChannels.map((channel) => {
-                const active = channelFilter === channel;
-                return (
-                  <Pressable
-                    key={channel}
-                    onPress={() => {
-                      tapHaptic();
-                      setChannelFilter(active ? null : channel);
-                    }}
-                    style={[styles.chip, active && styles.chipActive]}
-                  >
-                    {active ? <Ionicons name="close" size={14} color="#FFFFFF" /> : null}
-                    <Text style={styles.chipText}>{channel}</Text>
-                  </Pressable>
-                );
-              })}
+              {topChannels.map((c) => (
+                <Chip key={c} label={c} selected={channelFilter === c} icon={channelFilter === c ? 'close' : undefined} onPress={() => setChannelFilter(channelFilter === c ? null : c)} />
+              ))}
             </ScrollView>
           ) : null}
-
-          <View
-            style={styles.actionsRow}
-            onLayout={(e) => setAnchorY(e.nativeEvent.layout.y)}
-          >
-            <Pressable onPress={() => setIsSearching(true)} style={styles.actionIcon} hitSlop={6} accessibilityLabel="Search in Liked Songs">
-              <Ionicons name="search" size={22} color={Colors.textSubdued} />
+          <View style={styles.actions} onLayout={(e) => setAnchorY(e.nativeEvent.layout.y)}>
+            <IconButton icon="search" onPress={() => setIsSearching(true)} accessibilityLabel="Find in Liked Songs" color={colors.textSecondary} />
+            <Pressable onPress={cycleSort} hitSlop={6} style={styles.sort} accessibilityRole="button" accessibilityLabel={`Sort: ${SORT_LABELS[sort]}`}>
+              <Ionicons name="swap-vertical" size={16} color={colors.textSecondary} />
+              <Text variant="captionStrong" color="textSecondary">{SORT_LABELS[sort]}</Text>
             </Pressable>
-            <Pressable onPress={cycleSort} style={styles.sortButton} hitSlop={6}>
-              <Ionicons name="swap-vertical" size={16} color={Colors.textSubdued} />
-              <Text style={styles.sortText}>{SORT_LABELS[sort]}</Text>
-            </Pressable>
-            <Pressable onPress={() => void handleMakePlaylist()} style={styles.actionIcon} hitSlop={6} accessibilityLabel="Make this a playlist">
-              {isMakingPlaylist ? (
-                <ActivityIndicator color={Colors.textSubdued} size="small" />
-              ) : (
-                <Ionicons name="duplicate-outline" size={22} color={Colors.textSubdued} />
-              )}
-            </Pressable>
-            <View style={styles.flex} />
-            <Pressable onPress={toggleShuffle} style={styles.actionIcon} hitSlop={6} accessibilityLabel="Shuffle">
-              <Ionicons name="shuffle" size={26} color={shuffleMode === 'off' ? Colors.textSubdued : Colors.secondary} />
-            </Pressable>
+            {isMaking ? (
+              <ActivityIndicator color={colors.textSecondary} style={{ width: Layout.touchTarget }} />
+            ) : (
+              <IconButton icon="duplicate-outline" onPress={() => void makePlaylist()} accessibilityLabel="Make these into a playlist" color={colors.textSecondary} />
+            )}
+            <View style={{ flex: 1 }} />
+            <IconButton icon="shuffle" onPress={toggleShuffle} accessibilityLabel={shuffleMode === 'off' ? 'Shuffle off' : 'Shuffle on'}
+              color={shuffleMode === 'off' ? colors.textSecondary : colors.accentInk} iconSize={26} />
             <PlayButtonSlot />
           </View>
         </>
@@ -223,185 +177,60 @@ export default function LikedSongsScreen() {
   );
 
   const empty = likedQuery.isLoading ? (
-    <ActivityIndicator color={Colors.primary} style={styles.loader} />
-  ) : likedSongs.length === 0 ? (
-    <View style={styles.emptyState}>
-      <View style={styles.emptyIcon}>
-        <Ionicons name="heart-outline" size={40} color={Colors.secondary} />
-      </View>
-      <Text style={styles.emptyTitle}>Songs you like will appear here</Text>
-      <Text style={styles.emptyBody}>Save songs by tapping the heart icon.</Text>
-      <Pressable onPress={() => navigation.navigate('Tabs')} style={styles.emptyButton}>
-        <Text style={styles.emptyButtonText}>Find songs</Text>
-      </Pressable>
+    <View style={{ gap: Space[3], paddingHorizontal: Layout.gutter }}>
+      {Array.from({ length: 6 }).map((_, i) => (
+        <View key={i} style={{ alignItems: 'center', flexDirection: 'row', gap: Space[3] }}>
+          <SkeletonLoader width={48} height={48} />
+          <View style={{ flex: 1, gap: Space[2] }}>
+            <SkeletonLoader width="65%" height={13} />
+            <SkeletonLoader width="40%" height={11} />
+          </View>
+        </View>
+      ))}
     </View>
+  ) : likedSongs.length === 0 ? (
+    <EmptyState icon="heart-outline" title="Songs you love will live here" body="Tap the heart on any song and it'll be waiting for you." actionLabel="Find songs" onAction={() => navigation.navigate('Tabs', { screen: 'Search' })} />
   ) : (
-    <Text style={styles.noMatch}>No liked songs match your filters.</Text>
+    <EmptyState icon="filter-outline" title="Nothing matches" body="Clear the filter or try another word." compact />
   );
 
   return (
-    <View style={styles.container}>
+    <View style={styles.root}>
       <FlashList
         data={visibleSongs}
         keyExtractor={(item) => item.id}
         onScroll={onScroll}
         scrollEventThrottle={16}
-        ListHeaderComponent={hero}
+        ListHeaderComponent={header}
         ListEmptyComponent={empty}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
-        renderItem={({ item, index }) => (
-          <SongRow song={item} isLoading={loadingId === item.id} onPress={() => void play(index)} />
-        )}
+        contentContainerStyle={{ paddingBottom: insets.bottom + Space[16] }}
+        renderItem={({ item, index }) => <SongRow song={item} isLoading={loadingId === item.id} onPress={() => void play(index)} />}
       />
-
-      <CollapsingTopBar
-        scrollY={scrollY}
-        title="Liked Songs"
-        background={HERO_TINT}
-        threshold={insets.top + 100}
-        onBack={() => navigation.goBack()}
-      />
+      <CollapsingTopBar scrollY={scrollY} title="Liked Songs" background={tint.bar} ink={tint.ink} threshold={insets.top + 250} onBack={() => navigation.goBack()} />
       {likedSongs.length > 0 ? (
-        <StickyPlayButton scrollY={scrollY} anchorY={anchorY} isPlaying={isThisPlaying} onPress={handleHeaderPlay} />
+        <StickyPlayButton scrollY={scrollY} anchorY={anchorY} isPlaying={isThisContext && isPlaying}
+          onPress={() => (isThisContext ? void playback.togglePlay() : void play(0, shuffleMode !== 'off'))} />
       ) : null}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    backgroundColor: Colors.background,
-    flex: 1,
-  },
-  flex: {
-    flex: 1,
-  },
-  hero: {
-    paddingBottom: 16,
-    paddingHorizontal: 16,
-  },
-  heroTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.display,
-    fontWeight: '700',
-  },
-  heroMeta: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    marginTop: 6,
-  },
+const useStyles = makeStyles((t) => ({
+  root: { backgroundColor: t.colors.bg, flex: 1 },
+  hero: { gap: Space[5], paddingBottom: Space[5], paddingHorizontal: Layout.gutter },
   searchRow: {
     alignItems: 'center',
-    backgroundColor: Colors.surfaceHighlight,
-    borderRadius: 8,
+    backgroundColor: t.colors.surface,
+    borderRadius: Radius.md,
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 8,
-    marginHorizontal: 16,
-    paddingHorizontal: 12,
+    gap: Space[2],
+    height: 46,
+    marginBottom: Space[3],
+    marginHorizontal: Layout.gutter,
+    paddingHorizontal: Space[4],
   },
-  searchInput: {
-    color: Colors.onBackground,
-    flex: 1,
-    fontSize: TypeScale.small,
-    paddingVertical: 8,
-  },
-  searchCancel: {
-    color: Colors.onBackground,
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  chips: {
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-  },
-  chip: {
-    alignItems: 'center',
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: 999,
-    flexDirection: 'row',
-    gap: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  chipActive: {
-    backgroundColor: Colors.primary,
-  },
-  chipText: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  actionsRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    height: 56,
-    marginVertical: 8,
-    paddingHorizontal: 16,
-  },
-  actionIcon: {
-    alignItems: 'center',
-    height: 40,
-    justifyContent: 'center',
-    width: 36,
-  },
-  sortButton: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 4,
-    paddingHorizontal: 4,
-  },
-  sortText: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  loader: {
-    marginTop: 48,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingHorizontal: 32,
-    paddingTop: 48,
-  },
-  emptyIcon: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(245,166,35,0.12)',
-    borderRadius: 999,
-    height: 88,
-    justifyContent: 'center',
-    marginBottom: 20,
-    width: 88,
-  },
-  emptyTitle: {
-    color: Colors.onBackground,
-    fontSize: TypeScale.title,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  emptyBody: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  emptyButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 999,
-    marginTop: 24,
-    paddingHorizontal: 28,
-    paddingVertical: 12,
-  },
-  emptyButtonText: {
-    color: '#000000',
-    fontSize: TypeScale.body,
-    fontWeight: '700',
-  },
-  noMatch: {
-    color: Colors.textMuted,
-    paddingVertical: 32,
-    textAlign: 'center',
-  },
-});
+  searchInput: { ...Type.body, color: t.colors.text, flex: 1, height: '100%' },
+  chips: { gap: Space[2], paddingBottom: Space[2], paddingHorizontal: Layout.gutter },
+  actions: { alignItems: 'center', flexDirection: 'row', gap: Space[1], height: 56, marginBottom: Space[2], paddingLeft: Space[3], paddingRight: Layout.gutter },
+  sort: { alignItems: 'center', flexDirection: 'row', gap: Space[1], minHeight: Layout.touchTarget, paddingHorizontal: Space[1] },
+}));

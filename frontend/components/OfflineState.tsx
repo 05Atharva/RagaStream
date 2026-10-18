@@ -1,129 +1,24 @@
 import React from 'react';
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View } from 'react-native';
+import { useColors } from '../theme/ThemeProvider';
+import EmptyState from './ui/EmptyState';
 
 type Props = {
   onRetry: () => void;
 };
 
+/** Full-screen offline state over the tab content (the mini player stays usable). */
 export default function OfflineState({ onRetry }: Props) {
+  const colors = useColors();
   return (
-    <View style={styles.container}>
-      {/* Ambient purple glow — sits behind all content */}
-      <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.glowLayer]}>
-        <View style={styles.glowOrb} />
-      </View>
-
-      {/* Icon */}
-      <View style={styles.iconCircle}>
-        <Ionicons name="cloud-offline-outline" size={60} color="rgba(204,195,216,0.8)" />
-      </View>
-
-      <Text style={styles.title}>You're offline</Text>
-      <Text style={styles.subtitle}>
-        Check your connection and try again to keep the music playing.
-      </Text>
-
-      <Pressable
-        onPress={onRetry}
-        style={({ pressed }) => [styles.retryBtn, pressed && styles.retryBtnPressed]}
-      >
-        <Ionicons name="refresh" size={16} color="#ede0ff" />
-        <Text style={styles.retryText}>Retry</Text>
-      </Pressable>
+    <View style={{ flex: 1, justifyContent: 'center', backgroundColor: colors.bg }}>
+      <EmptyState
+        icon="cloud-offline-outline"
+        title="You're offline"
+        body="Check your Wi-Fi or mobile data. Your library and queue will be right here when you're back."
+        actionLabel="Try again"
+        onAction={onRetry}
+      />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    alignItems: 'center',
-    backgroundColor: '#000000',
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
-
-  // ── Glow ──
-  glowLayer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  glowOrb: {
-    backgroundColor: 'rgba(124,58,237,0.08)',
-    borderRadius: 180,
-    elevation: 0,
-    height: 360,
-    shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.2,
-    shadowRadius: 80,
-    width: 360,
-  },
-
-  // ── Icon circle ──
-  iconCircle: {
-    alignItems: 'center',
-    backgroundColor: '#1e2020',
-    borderColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 64,
-    borderWidth: 1,
-    height: 128,
-    justifyContent: 'center',
-    marginBottom: 32,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5,
-    shadowRadius: 24,
-    width: 128,
-  },
-
-  // ── Copy ──
-  title: {
-    color: '#e2e2e2',
-    fontSize: 40,
-    fontWeight: '800',
-    letterSpacing: -0.8,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  subtitle: {
-    color: 'rgba(204,195,216,0.85)',
-    fontSize: 16,
-    fontWeight: '400',
-    lineHeight: 24,
-    marginBottom: 40,
-    maxWidth: 280,
-    textAlign: 'center',
-  },
-
-  // ── Retry button ──
-  retryBtn: {
-    alignItems: 'center',
-    backgroundColor: '#7C3AED',
-    borderRadius: 999,
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 40,
-    paddingVertical: 16,
-    shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.35,
-    shadowRadius: 20,
-  },
-  retryBtnPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.96 }],
-  },
-  retryText: {
-    color: '#ede0ff',
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 0.48,
-  },
-});

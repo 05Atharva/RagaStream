@@ -11,7 +11,7 @@
  *   isAutoplay tracks     — appended from song radio when the context runs out
  *   isRecommendation      — Smart Shuffle picks mixed into the upcoming context
  */
-import Toast from 'react-native-toast-message';
+import Toast from './toast';
 import { apiClient } from './apiClient';
 import { queryClient } from './queryClient';
 import { ensureSongInCatalogue } from './songService';

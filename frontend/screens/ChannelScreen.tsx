@@ -1,60 +1,60 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { FlashList } from '@shopify/flash-list';
-import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import Toast from 'react-native-toast-message';
+import Toast from '../services/toast';
+import SkeletonLoader from '../components/SkeletonLoader';
 import SongRow from '../components/SongRow';
-import {
-  CollapsingTopBar,
-  PlayButtonSlot,
-  StickyPlayButton,
-  useCollapsingHeader,
-} from '../components/CollapsingHeader';
+import { CollapsingTopBar, PlayButtonSlot, StickyPlayButton, useCollapsingHeader } from '../components/CollapsingHeader';
+import Button from '../components/ui/Button';
+import EmptyState from '../components/ui/EmptyState';
+import IconButton from '../components/ui/IconButton';
+import SectionHeader from '../components/ui/SectionHeader';
+import Text from '../components/ui/Text';
+import Rise from '../motion/Rise';
 import { apiClient } from '../services/apiClient';
 import * as playback from '../services/playbackController';
 import { tapHaptic } from '../services/haptics';
-import { useArtworkColor } from '../hooks/useArtworkColor';
+import { useArtworkColor, useHeroTint } from '../hooks/useArtworkColor';
 import { usePlayerStore } from '../store/playerStore';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import { Colors, TypeScale } from '../constants/theme';
+import { Elevation, Layout, Radius, Space } from '../constants/theme';
+import { makeStyles, useColors } from '../theme/ThemeProvider';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Channel'>;
 
 export default function ChannelScreen({ route, navigation }: Props) {
   const { channelName } = route.params;
+  const styles = useStyles();
+  const colors = useColors();
   const insets = useSafeAreaInsets();
   const { scrollY, onScroll } = useCollapsingHeader();
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [anchorY, setAnchorY] = useState(0);
-  const [isStartingRadio, setIsStartingRadio] = useState(false);
+  const [startingRadio, setStartingRadio] = useState(false);
 
   const context = usePlayerStore((s) => s.context);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const shuffleMode = usePlayerStore((s) => s.shuffleMode);
   const isThisContext = context?.type === 'channel' && context.id === channelName;
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['channel-songs', channelName],
-    queryFn: async () => {
-      const { data: results } = await apiClient.get<playback.YouTubeResult[]>('/youtube/search', {
-        params: { q: channelName, limit: 20 },
-      });
-      return results;
-    },
+    queryFn: async () => (await apiClient.get<playback.YouTubeResult[]>('/youtube/search', { params: { q: channelName, limit: 20 } })).data,
   });
 
-  // Uploads from this exact channel first; other matches for the name after.
+  // This channel's own uploads first, then other matches for the name.
   const songs = useMemo(() => {
     const all = (data ?? []).map(playback.fromYouTube);
-    const own = all.filter((s) => s.channel_name === channelName);
-    return [...own, ...all.filter((s) => s.channel_name !== channelName)];
+    return [...all.filter((s) => s.channel_name === channelName), ...all.filter((s) => s.channel_name !== channelName)];
   }, [data, channelName]);
 
   const palette = useArtworkColor(songs[0]?.thumbnail_url);
+  const tint = useHeroTint(palette);
   const channelContext = { type: 'channel' as const, name: channelName, id: channelName };
 
   const play = async (index: number, shuffle?: boolean) => {
@@ -65,22 +65,22 @@ export default function ChannelScreen({ route, navigation }: Props) {
       await playback.playSongs(songs, index, channelContext, { shuffle, thumbnail: song.thumbnail_url });
       navigation.navigate('NowPlaying');
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not play this track' });
+      Toast.show({ type: 'error', text1: "Couldn't play this song", text2: 'Try another one.' });
     } finally {
       setLoadingId(null);
     }
   };
 
-  const handleRadio = async () => {
-    if (!songs[0] || isStartingRadio) return;
-    setIsStartingRadio(true);
+  const startRadio = async () => {
+    if (!songs[0] || startingRadio) return;
+    setStartingRadio(true);
     try {
-      await playback.startRadio(songs[0]);
+      await playback.startRadio(songs[0], `${channelName} Radio`);
       navigation.navigate('NowPlaying');
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not start radio' });
+      Toast.show({ type: 'error', text1: "Couldn't start the radio" });
     } finally {
-      setIsStartingRadio(false);
+      setStartingRadio(false);
     }
   };
 
@@ -92,159 +92,79 @@ export default function ChannelScreen({ route, navigation }: Props) {
 
   const header = (
     <View>
-      <LinearGradient colors={[palette.background, '#000000']} style={[styles.hero, { paddingTop: insets.top + 56 }]}>
-        <View style={[styles.avatar, { backgroundColor: palette.accent }]}>
-          <Text style={styles.avatarText}>{channelName.charAt(0).toUpperCase()}</Text>
-        </View>
-        <Text numberOfLines={2} style={styles.channelTitle}>{channelName}</Text>
-        <Text style={styles.channelMeta}>{isLoading ? 'Loading…' : `${songs.length} tracks`}</Text>
+      <LinearGradient colors={[tint.top, colors.bg]} style={[styles.hero, { paddingTop: insets.top + 64 }]}>
+        <Rise style={[styles.avatar, Elevation.art]}>
+          {songs[0]?.thumbnail_url ? (
+            <Image source={{ uri: songs[0].thumbnail_url }} style={{ height: '100%', width: '100%' }} contentFit="cover" />
+          ) : (
+            <View style={[styles.avatarFallback, { backgroundColor: palette.accent }]}>
+              <Text variant="hero" color="#FFFFFF">{channelName.charAt(0).toUpperCase()}</Text>
+            </View>
+          )}
+        </Rise>
+        <Rise index={1} style={{ alignItems: 'center', gap: Space[2] }}>
+          <Text variant="display" align="center" numberOfLines={2}>{channelName}</Text>
+          <Text variant="mono" color="textSecondary">{isLoading ? 'Finding songs…' : `${songs.length} songs found`}</Text>
+        </Rise>
       </LinearGradient>
 
-      <View style={styles.actionsRow} onLayout={(e) => setAnchorY(e.nativeEvent.layout.y)}>
-        <Pressable onPress={() => void handleRadio()} style={styles.radioButton} disabled={!songs.length}>
-          {isStartingRadio ? (
-            <ActivityIndicator color="#FFFFFF" size="small" />
-          ) : (
-            <Ionicons name="radio-outline" size={16} color="#FFFFFF" />
-          )}
-          <Text style={styles.radioText}>Channel radio</Text>
-        </Pressable>
-        <View style={styles.flex} />
-        <Pressable onPress={toggleShuffle} style={styles.actionIcon} hitSlop={6} accessibilityLabel="Shuffle">
-          <Ionicons name="shuffle" size={26} color={shuffleMode === 'off' ? Colors.textSubdued : Colors.secondary} />
-        </Pressable>
+      <View style={styles.actions} onLayout={(e) => setAnchorY(e.nativeEvent.layout.y)}>
+        <Button label="Channel radio" icon="radio-outline" size="sm" variant="outline" onPress={() => void startRadio()} loading={startingRadio} disabled={!songs.length} />
+        <View style={{ flex: 1 }} />
+        <IconButton icon="shuffle" onPress={toggleShuffle} accessibilityLabel={shuffleMode === 'off' ? 'Shuffle off' : 'Shuffle on'}
+          color={shuffleMode === 'off' ? colors.textSecondary : colors.accentInk} iconSize={26} />
         <PlayButtonSlot />
       </View>
-
-      <Text style={styles.sectionTitle}>Popular</Text>
+      <SectionHeader title="Popular" />
     </View>
   );
 
   return (
-    <View style={styles.container}>
+    <View style={styles.root}>
       <FlashList
         data={songs}
         keyExtractor={(item) => item.youtube_id}
         onScroll={onScroll}
         scrollEventThrottle={16}
         ListHeaderComponent={header}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + Space[16] }}
         renderItem={({ item, index }) => (
-          <SongRow
-            song={item}
-            index={index + 1}
-            isLoading={loadingId === item.youtube_id}
-            onPress={() => void play(index)}
-            menuOptions={{ hideGoToChannel: item.channel_name === channelName }}
-          />
+          <SongRow song={item} index={index + 1} isLoading={loadingId === item.youtube_id} onPress={() => void play(index)}
+            menuOptions={{ hideGoToChannel: item.channel_name === channelName }} />
         )}
         ListEmptyComponent={
           isLoading ? (
-            <ActivityIndicator color={Colors.primary} style={styles.loader} />
+            <View style={{ gap: Space[3], paddingHorizontal: Layout.gutter }}>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <View key={i} style={{ alignItems: 'center', flexDirection: 'row', gap: Space[3] }}>
+                  <SkeletonLoader width={48} height={48} />
+                  <View style={{ flex: 1, gap: Space[2] }}>
+                    <SkeletonLoader width="65%" height={13} />
+                    <SkeletonLoader width="40%" height={11} />
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : isError ? (
+            <EmptyState icon="cloud-offline-outline" title="Couldn't load this channel" body="Check your connection and try again." actionLabel="Try again" onAction={() => void refetch()} compact />
           ) : (
-            <Text style={styles.emptyText}>No songs found for this channel.</Text>
+            <EmptyState icon="search" title="No songs found" body="This channel didn't return any music." compact />
           )
         }
       />
-
-      <CollapsingTopBar
-        scrollY={scrollY}
-        title={channelName}
-        background={palette.muted}
-        threshold={insets.top + 200}
-        onBack={() => navigation.goBack()}
-      />
+      <CollapsingTopBar scrollY={scrollY} title={channelName} background={tint.bar} ink={tint.ink} threshold={insets.top + 230} onBack={() => navigation.goBack()} />
       {songs.length > 0 ? (
-        <StickyPlayButton
-          scrollY={scrollY}
-          anchorY={anchorY}
-          isPlaying={isThisContext && isPlaying}
-          onPress={() => (isThisContext ? void playback.togglePlay() : void play(0, shuffleMode !== 'off'))}
-        />
+        <StickyPlayButton scrollY={scrollY} anchorY={anchorY} isPlaying={isThisContext && isPlaying}
+          onPress={() => (isThisContext ? void playback.togglePlay() : void play(0, shuffleMode !== 'off'))} />
       ) : null}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    backgroundColor: Colors.background,
-    flex: 1,
-  },
-  flex: {
-    flex: 1,
-  },
-  hero: {
-    alignItems: 'center',
-    paddingBottom: 16,
-    paddingHorizontal: 16,
-  },
-  avatar: {
-    alignItems: 'center',
-    borderRadius: 999,
-    height: 140,
-    justifyContent: 'center',
-    marginBottom: 16,
-    width: 140,
-  },
-  avatarText: {
-    color: '#FFFFFF',
-    fontSize: 56,
-    fontWeight: '700',
-  },
-  channelTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.display,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  channelMeta: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    marginTop: 6,
-  },
-  actionsRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    height: 56,
-    marginVertical: 8,
-    paddingHorizontal: 16,
-  },
-  radioButton: {
-    alignItems: 'center',
-    borderColor: 'rgba(255,255,255,0.35)',
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  radioText: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  actionIcon: {
-    alignItems: 'center',
-    height: 40,
-    justifyContent: 'center',
-    width: 36,
-  },
-  sectionTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.title,
-    fontWeight: '700',
-    marginBottom: 4,
-    paddingHorizontal: 16,
-  },
-  loader: {
-    marginTop: 48,
-  },
-  emptyText: {
-    color: Colors.textMuted,
-    paddingVertical: 32,
-    textAlign: 'center',
-  },
-});
+const useStyles = makeStyles((t) => ({
+  root: { backgroundColor: t.colors.bg, flex: 1 },
+  hero: { alignItems: 'center', gap: Space[5], paddingBottom: Space[4], paddingHorizontal: Layout.gutter },
+  avatar: { backgroundColor: t.colors.surfaceRaised, borderRadius: Radius.pill, height: 156, overflow: 'hidden', width: 156 },
+  avatarFallback: { alignItems: 'center', flex: 1, justifyContent: 'center' },
+  actions: { alignItems: 'center', flexDirection: 'row', gap: Space[2], height: 56, marginBottom: Space[4], paddingHorizontal: Layout.gutter },
+}));

@@ -1,15 +1,20 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Pressable } from 'react-native';
+import Animated from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
+import { Radius, Space } from '../constants/theme';
+import { useTheme } from '../theme/ThemeProvider';
+import { usePressMotion } from '../motion/primitives';
+import Text from './ui/Text';
 
-interface GoogleButtonProps {
+type GoogleButtonProps = {
   label: string;
   onPress: () => void;
   disabled?: boolean;
   loading?: boolean;
-}
+};
 
-function GoogleGIcon() {
+function GoogleG() {
   return (
     <Svg width={20} height={20} viewBox="0 0 24 24">
       <Path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
@@ -20,45 +25,37 @@ function GoogleGIcon() {
   );
 }
 
+/** Google's own button styling (white, multicolour G) per their brand rules. */
 export default function GoogleButton({ label, onPress, disabled = false, loading = false }: GoogleButtonProps) {
+  const { isDark } = useTheme();
+  const press = usePressMotion();
   return (
-    <Pressable
-      style={({ pressed }) => [styles.button, pressed && styles.pressed, (disabled || loading) && styles.dimmed]}
-      onPress={onPress}
-      disabled={disabled || loading}
-    >
-      {loading ? (
-        <ActivityIndicator color="#1a1a1a" size="small" />
-      ) : (
-        <>
-          <GoogleGIcon />
-          <Text style={styles.label}>{label}</Text>
-        </>
-      )}
+    <Pressable onPress={onPress} onPressIn={press.onPressIn} onPressOut={press.onPressOut} disabled={disabled || loading}
+      accessibilityRole="button" accessibilityLabel={label}>
+      <Animated.View
+        style={[
+          {
+            alignItems: 'center',
+            backgroundColor: '#FFFFFF',
+            borderColor: isDark ? 'transparent' : 'rgba(11,15,26,0.12)',
+            borderRadius: Radius.pill,
+            borderWidth: 1,
+            flexDirection: 'row',
+            gap: Space[3],
+            height: 54,
+            justifyContent: 'center',
+            opacity: disabled ? 0.5 : 1,
+          },
+          press.style,
+        ]}
+      >
+        {loading ? <ActivityIndicator color="#1F1F1F" /> : (
+          <>
+            <GoogleG />
+            <Text variant="subtitle" color="#1F1F1F">{label}</Text>
+          </>
+        )}
+      </Animated.View>
     </Pressable>
   );
 }
-
-const styles = StyleSheet.create({
-  button: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 999,
-    height: 56,
-    gap: 10,
-  },
-  pressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
-  },
-  dimmed: {
-    opacity: 0.6,
-  },
-  label: {
-    color: '#1a1a1a',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-});

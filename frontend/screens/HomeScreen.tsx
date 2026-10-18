@@ -1,28 +1,23 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Dimensions,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { ActivityIndicator, Dimensions, Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import Toast from 'react-native-toast-message';
-import PressableCard from '../components/PressableCard';
+import Toast from '../services/toast';
 import PlaylistCover from '../components/PlaylistCover';
 import SkeletonLoader from '../components/SkeletonLoader';
 import SongRow from '../components/SongRow';
+import Chip from '../components/ui/Chip';
+import SectionHeader from '../components/ui/SectionHeader';
+import Tappable from '../components/ui/Tappable';
+import Text from '../components/ui/Text';
+import Rise from '../motion/Rise';
+import { useFirstMount } from '../motion/primitives';
 import { apiClient } from '../services/apiClient';
 import * as playback from '../services/playbackController';
-import { tapHaptic } from '../services/haptics';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import type { Song } from '../hooks/useSongs';
 import { useLikedSongs } from '../hooks/useLiked';
@@ -31,162 +26,120 @@ import { useBottomPadding } from '../hooks/useBottomPadding';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore, type RecentContext } from '../store/settingsStore';
 import { openSongMenu } from '../store/songMenuStore';
-import { Colors, Motion, TypeScale } from '../constants/theme';
+import { Brand, Elevation, Layout, Radius, Space, alpha } from '../constants/theme';
+import { makeStyles, useColors, useTheme } from '../theme/ThemeProvider';
+import { currentPrahar } from '../theme/prahar';
 
 type Props = BottomTabScreenProps<BottomTabParamList, 'Home'>;
 
-const GENRES = ['Bollywood', 'Classical', 'Folk', 'Devotional', 'Indie', 'Punjabi', 'Ghazals', 'Sufi'] as const;
+const GENRES = ['Bollywood', 'Classical', 'Devotional', 'Ghazals', 'Sufi', 'Folk', 'Punjabi', 'Indie'] as const;
 
-// PRD §7.1: 4 hardcoded tracks as banner cards. Metadata is static so the row
-// renders instantly; the stream is only resolved when a card is tapped.
+// PRD §7.1: 4 hand-picked tracks. Metadata is static so the row renders
+// instantly; the stream is resolved only when a card is tapped.
 const FEATURED: Array<playback.SongInput & { badge: string }> = [
-  { youtube_id: '81qmmlsIE3k', title: 'Tum Hi Ho', channel_name: 'Arijit Singh · Aashiqui 2', badge: 'TOP 50' },
-  { youtube_id: 'T94PHkuydcw', title: 'Kun Faya Kun', channel_name: 'A.R. Rahman · Rockstar', badge: 'FEATURED' },
-  { youtube_id: '5Eqb_-j3FDA', title: 'Pasoori', channel_name: 'Ali Sethi x Shae Gill · Coke Studio', badge: 'TRENDING' },
-  { youtube_id: 'BddP6PYo2gs', title: 'Kesariya', channel_name: 'Arijit Singh · Brahmāstra', badge: 'NEW RELEASE' },
+  { youtube_id: 'BddP6PYo2gs', title: 'Kesariya', channel_name: 'Arijit Singh · Brahmāstra', badge: 'Editor’s pick' },
+  { youtube_id: 'T94PHkuydcw', title: 'Kun Faya Kun', channel_name: 'A.R. Rahman · Rockstar', badge: 'Timeless' },
+  { youtube_id: '5Eqb_-j3FDA', title: 'Pasoori', channel_name: 'Ali Sethi x Shae Gill', badge: 'Coke Studio' },
+  { youtube_id: '81qmmlsIE3k', title: 'Tum Hi Ho', channel_name: 'Arijit Singh · Aashiqui 2', badge: 'Top 50' },
 ];
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const CONTENT_PADDING = 16;
-const FEATURED_CARD_WIDTH = (SCREEN_WIDTH - CONTENT_PADDING * 2) * 0.85;
-const FEATURED_CARD_HEIGHT = 190;
-const SHORTCUT_WIDTH = (SCREEN_WIDTH - CONTENT_PADDING * 2 - 8) / 2;
-const CARD_SIZE = 140;
+const FEATURED_WIDTH = SCREEN_WIDTH - Layout.gutter * 2 - 28;
+const SHORTCUT_WIDTH = (SCREEN_WIDTH - Layout.gutter * 2 - Space[2]) / 2;
+const CARD = 148;
 
-function getGreeting() {
-  const hour = new Date().getHours();
-  return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-}
-
-function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+function SongCard({ song, subtitle, onPress, loading }: { song: playback.SongInput; subtitle?: string; onPress: () => void; loading: boolean }) {
+  const styles = useStyles();
   return (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
-    </View>
-  );
-}
-
-function Chip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
-  return (
-    <Pressable
-      onPress={() => {
-        tapHaptic();
-        onPress();
-      }}
-      style={({ pressed }) => [
-        styles.chip,
-        selected && styles.chipSelected,
-        pressed && { transform: [{ scale: Motion.pressScale }] },
-      ]}
-    >
-      <Text style={styles.chipText}>{label}</Text>
-    </Pressable>
-  );
-}
-
-/** Square card for horizontal rows (On Repeat, Recently played). */
-function SongCard({
-  song,
-  subtitle,
-  onPress,
-  isLoading,
-}: {
-  song: playback.SongInput;
-  subtitle?: string;
-  onPress: () => void;
-  isLoading: boolean;
-}) {
-  return (
-    <PressableCard style={styles.card} onPress={onPress} onLongPress={() => openSongMenu(song)}>
-      <View style={styles.cardThumbWrap}>
-        <Image
-          source={{ uri: song.thumbnail_url || playback.thumbnailFor(song.youtube_id) }}
-          style={styles.cardThumb}
-          contentFit="cover"
-        />
-        {isLoading ? (
-          <View style={styles.cardLoader}>
-            <ActivityIndicator color="#FFFFFF" size="small" />
-          </View>
-        ) : null}
+    <Tappable style={{ width: CARD }} onPress={onPress} onLongPress={() => openSongMenu(song)} pressScale={0.96}
+      accessibilityRole="button" accessibilityLabel={`${song.title}, ${song.channel_name ?? ''}`}>
+      <View style={styles.cardArt}>
+        <Image source={{ uri: song.thumbnail_url || playback.thumbnailFor(song.youtube_id) }} style={styles.fill} contentFit="cover" transition={150} />
+        {loading ? <View style={styles.cardLoader}><ActivityIndicator color="#FFFFFF" /></View> : null}
       </View>
-      <Text numberOfLines={1} style={styles.cardTitle}>{song.title}</Text>
-      <Text numberOfLines={1} style={styles.cardSubtitle}>{subtitle ?? song.channel_name}</Text>
-    </PressableCard>
+      <Text variant="captionStrong" numberOfLines={1}>{song.title}</Text>
+      <Text variant="caption" color="textSecondary" numberOfLines={1}>{subtitle ?? song.channel_name}</Text>
+    </Tappable>
   );
 }
 
-/** In-place genre view: chips filter Home instead of jumping to Search. */
+/** Chips filter Home in place (US-08): the genre's popular songs appear right here. */
 function GenreSection({ genre, onOpenNowPlaying }: { genre: string; onOpenNowPlaying: () => void }) {
+  const colors = useColors();
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ['genre-home', genre],
     staleTime: 10 * 60 * 1000,
     queryFn: async () => {
-      const { data: results } = await apiClient.get<playback.YouTubeResult[]>('/youtube/search', {
-        params: { q: `${genre} songs`, limit: 20 },
-      });
+      const { data: results } = await apiClient.get<playback.YouTubeResult[]>('/youtube/search', { params: { q: `${genre} songs`, limit: 20 } });
       return results.map(playback.fromYouTube);
     },
   });
   const songs = data ?? [];
-  const context = { type: 'home' as const, name: genre, id: `genre-${genre}` };
 
   const play = async (index: number, shuffle?: boolean) => {
     setLoadingId(shuffle ? null : songs[index]?.youtube_id ?? null);
     try {
-      await playback.playSongs(songs, index, context, { shuffle });
+      await playback.playSongs(songs, index, { type: 'home', name: genre, id: `genre-${genre}` }, { shuffle });
       onOpenNowPlaying();
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not play this track' });
+      Toast.show({ type: 'error', text1: "Couldn't play this song", text2: 'Try another one.' });
     } finally {
       setLoadingId(null);
     }
   };
 
   return (
-    <Animated.View entering={FadeIn.duration(Motion.duration.enter)}>
-      <View style={styles.genreHeader}>
-        <View style={styles.flex}>
-          <Text style={styles.genreTitle}>{genre}</Text>
-          <Text style={styles.sectionSubtitle}>Popular right now</Text>
+    <View>
+      <Rise style={{ alignItems: 'flex-end', flexDirection: 'row', gap: Space[3], marginBottom: Space[3], paddingHorizontal: Layout.gutter }}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text variant="display">{genre}</Text>
+          <Text variant="caption" color="textSecondary">Popular right now</Text>
         </View>
-        <Pressable onPress={() => void play(0, true)} disabled={!songs.length} style={styles.genreShuffle}>
-          <Ionicons name="shuffle" size={18} color="#FFFFFF" />
+        <Pressable onPress={() => void play(0, true)} disabled={!songs.length} accessibilityLabel={`Shuffle ${genre}`}
+          style={{ alignItems: 'center', height: Layout.touchTarget, justifyContent: 'center', width: Layout.touchTarget }}>
+          <Ionicons name="shuffle" size={24} color={colors.textSecondary} />
         </Pressable>
-        <Pressable onPress={() => void play(0)} disabled={!songs.length} style={styles.genrePlay}>
-          <Ionicons name="play" size={22} color="#FFFFFF" style={{ marginLeft: 2 }} />
+        <Pressable onPress={() => void play(0)} disabled={!songs.length} accessibilityLabel={`Play ${genre}`}
+          style={[{ alignItems: 'center', backgroundColor: colors.accent, borderRadius: Radius.pill, height: 52, justifyContent: 'center', width: 52 }, Elevation.floating]}>
+          <Ionicons name="play" size={22} color={colors.onAccent} style={{ marginLeft: 3 }} />
         </Pressable>
-      </View>
-      {isLoading ? (
-        <ActivityIndicator color={Colors.primary} style={{ marginTop: 32 }} />
-      ) : (
-        songs.map((song, index) => (
-          <SongRow
-            key={song.youtube_id}
-            song={song}
-            index={index + 1}
-            isLoading={loadingId === song.youtube_id}
-            onPress={() => void play(index)}
-          />
-        ))
-      )}
-    </Animated.View>
+      </Rise>
+      {isLoading
+        ? Array.from({ length: 6 }).map((_, i) => (
+            <View key={i} style={{ flexDirection: 'row', gap: Space[3], paddingHorizontal: Layout.gutter, paddingVertical: Space[2] }}>
+              <SkeletonLoader width={48} height={48} />
+              <View style={{ flex: 1, gap: Space[2], justifyContent: 'center' }}>
+                <SkeletonLoader width="70%" height={13} />
+                <SkeletonLoader width="40%" height={11} />
+              </View>
+            </View>
+          ))
+        : songs.map((song, index) => (
+            <Rise key={song.youtube_id} index={index}>
+              <SongRow song={song} index={index + 1} isLoading={loadingId === song.youtube_id} onPress={() => void play(index)} />
+            </Rise>
+          ))}
+    </View>
   );
 }
 
 export default function HomeScreen({ navigation }: Props) {
-  const rootNavigation = navigation.getParent();
-  const openNowPlaying = () => rootNavigation?.navigate('NowPlaying');
-  const session = useAuthStore((state) => state.session);
+  const styles = useStyles();
+  const colors = useColors();
+  const { isDark } = useTheme();
+  const root = navigation.getParent();
+  const openNowPlaying = () => root?.navigate('NowPlaying');
+  const firstMount = useFirstMount();
+  const prahar = useMemo(() => currentPrahar(), []);
+  const session = useAuthStore((s) => s.session);
   const displayName =
-    (session?.user?.user_metadata?.name as string | undefined) ||
-    (session?.user?.user_metadata?.full_name as string | undefined) ||
+    (session?.user?.user_metadata?.name as string | undefined)?.split(' ')[0] ||
+    (session?.user?.user_metadata?.full_name as string | undefined)?.split(' ')[0] ||
     session?.user?.email?.split('@')[0] ||
-    'Listener';
+    'there';
 
-  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
+  const [genre, setGenre] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   const recentContexts = useSettingsStore((s) => s.recentContexts);
@@ -194,294 +147,205 @@ export default function HomeScreen({ navigation }: Props) {
   const onRepeatQuery = useOnRepeat();
   const statsQuery = useListeningStats('long', 6);
   const likedQuery = useLikedSongs();
-
   const shouldFallback = (likedQuery.isSuccess && likedQuery.data.length === 0) || likedQuery.isError;
   const fallbackQuery = useQuery({
     queryKey: ['songs', 'quick-picks-fallback'],
     enabled: shouldFallback,
-    queryFn: async () => {
-      const { data } = await apiClient.get<Song[]>('/songs', { params: { limit: 6 } });
-      return data;
-    },
+    queryFn: async () => (await apiClient.get<Song[]>('/songs', { params: { limit: 6 } })).data,
     retry: false,
   });
 
-  const quickPicks = useMemo(
-    () => ((likedQuery.data?.length ?? 0) > 0 ? likedQuery.data!.slice(0, 6) : fallbackQuery.data ?? []),
-    [likedQuery.data, fallbackQuery.data]
-  );
+  const quickPicks = (likedQuery.data?.length ?? 0) > 0 ? likedQuery.data!.slice(0, 6) : fallbackQuery.data ?? [];
   const history = (historyQuery.data ?? []).slice(0, 12);
   const onRepeat = onRepeatQuery.data ?? [];
   const mixes = statsQuery.data?.top_channels.filter((c) => c.plays >= 2) ?? [];
+  const shortcuts = recentContexts.filter((c) => c.type !== 'liked').slice(0, 5);
 
-  const playList = async (songs: playback.SongInput[], index: number, name: string) => {
+  const run = async (key: string, fn: () => Promise<void>) => {
     if (loadingId) return;
-    setLoadingId(songs[index]?.youtube_id ?? null);
+    setLoadingId(key);
     try {
-      await playback.playSongs(songs, index, { type: 'home', name });
+      await fn();
       openNowPlaying();
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not play this track' });
+      Toast.show({ type: 'error', text1: "Couldn't start playback", text2: 'Check your connection and try again.' });
     } finally {
       setLoadingId(null);
     }
   };
 
-  const playMix = async (channel: string, seed: Song) => {
-    if (loadingId) return;
-    setLoadingId(seed.youtube_id);
-    try {
-      await playback.startRadio(seed, `${channel} Mix`);
-      openNowPlaying();
-    } catch {
-      Toast.show({ type: 'error', text1: 'Could not start this mix' });
-    } finally {
-      setLoadingId(null);
-    }
-  };
+  const playList = (songs: playback.SongInput[], index: number, name: string) =>
+    run(songs[index]?.youtube_id ?? name, () => playback.playSongs(songs, index, { type: 'home', name }));
 
-  const openContext = async (context: RecentContext) => {
-    switch (context.type) {
-      case 'playlist':
-        rootNavigation?.navigate('Playlist', { playlistId: context.id });
-        return;
-      case 'liked':
-        rootNavigation?.navigate('LikedSongs');
-        return;
-      case 'channel':
-        rootNavigation?.navigate('Channel', { channelName: context.id });
-        return;
-      case 'radio':
-        setLoadingId(context.id);
-        try {
-          await playback.startRadio(
-            { youtube_id: context.id, title: context.name.replace(/ (Radio|Mix)$/, ''), thumbnail_url: context.thumbnail },
-            context.name
-          );
-          openNowPlaying();
-        } catch {
-          Toast.show({ type: 'error', text1: 'Could not start radio' });
-        } finally {
-          setLoadingId(null);
-        }
-    }
+  const openContext = (context: RecentContext) => {
+    if (context.type === 'playlist') root?.navigate('Playlist', { playlistId: context.id });
+    else if (context.type === 'liked') root?.navigate('LikedSongs');
+    else if (context.type === 'channel') root?.navigate('Channel', { channelName: context.id });
+    else
+      void run(context.id, () =>
+        playback.startRadio(
+          { youtube_id: context.id, title: context.name.replace(/ (Radio|Mix)$/, ''), thumbnail_url: context.thumbnail },
+          context.name
+        )
+      );
   };
 
   const bottomPadding = useBottomPadding();
-  const hasAnimated = useRef(false);
-  useEffect(() => { hasAnimated.current = true; }, []);
-  const entering = !hasAnimated.current;
-
-  // Shortcut grid: Liked Songs + whatever you played from recently.
-  const shortcuts = recentContexts.filter((c) => c.type !== 'liked').slice(0, 5);
+  let section = 0; // stagger index for entrance choreography
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: bottomPadding }]}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* ── Header ── */}
-        <Animated.View entering={entering ? FadeInDown.duration(Motion.duration.enter) : undefined} style={styles.header}>
-          <Pressable onPress={() => rootNavigation?.navigate('Settings')} style={styles.avatar} hitSlop={8} accessibilityLabel="Settings">
-            <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
+    <SafeAreaView edges={['top']} style={styles.root}>
+      {/* Prahar wash: the ambient colour of this hour of the day */}
+      <LinearGradient
+        pointerEvents="none"
+        colors={[alpha(prahar.color, isDark ? 0.2 : 0.28), alpha(prahar.color, 0)]}
+        style={styles.wash}
+      />
+      <ScrollView contentContainerStyle={{ paddingBottom: bottomPadding }} showsVerticalScrollIndicator={false}>
+        <Rise play={firstMount} index={section++} style={styles.header}>
+          <View style={{ flex: 1, gap: Space[1] }}>
+            <Text variant="label" color="textSecondary">{prahar.label} · Raag {prahar.raga}</Text>
+            <Text variant="display" numberOfLines={2}>{prahar.greeting}, {displayName}</Text>
+          </View>
+          <Pressable onPress={() => root?.navigate('Settings')} hitSlop={8} accessibilityRole="button" accessibilityLabel="Settings and profile" style={styles.avatar}>
+            <Text variant="subtitle" color="onAccent">{displayName.charAt(0).toUpperCase()}</Text>
           </Pressable>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-            <Chip label="All" selected={selectedGenre === null} onPress={() => setSelectedGenre(null)} />
-            {GENRES.map((genre) => (
-              <Chip
-                key={genre}
-                label={genre}
-                selected={selectedGenre === genre}
-                onPress={() => setSelectedGenre(selectedGenre === genre ? null : genre)}
-              />
+        </Rise>
+
+        <Rise play={firstMount} index={section++}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+            <Chip label="For you" selected={genre === null} onPress={() => setGenre(null)} />
+            {GENRES.map((g) => (
+              <Chip key={g} label={g} selected={genre === g} onPress={() => setGenre(genre === g ? null : g)} />
             ))}
           </ScrollView>
-        </Animated.View>
+        </Rise>
 
-        {selectedGenre ? (
-          <GenreSection genre={selectedGenre} onOpenNowPlaying={openNowPlaying} />
+        {genre ? (
+          <GenreSection key={genre} genre={genre} onOpenNowPlaying={openNowPlaying} />
         ) : (
           <>
-            <Text style={styles.greeting}>{getGreeting()}, {displayName}</Text>
-
-            {/* ── Shortcut grid ("Jump back in") ── */}
-            <View style={styles.shortcutGrid}>
-              <PressableCard style={styles.shortcut} onPress={() => rootNavigation?.navigate('LikedSongs')}>
+            {/* Jump back in (US-03) */}
+            <Rise play={firstMount} index={section++} style={styles.shortcuts}>
+              <Tappable style={styles.shortcut} onPress={() => root?.navigate('LikedSongs')} pressScale={0.97} accessibilityRole="button" accessibilityLabel="Liked Songs">
                 <PlaylistCover variant="liked" size={56} borderRadius={0} />
-                <Text numberOfLines={2} style={styles.shortcutText}>Liked Songs</Text>
-              </PressableCard>
-              {shortcuts.map((context) => (
-                <PressableCard key={`${context.type}-${context.id}`} style={styles.shortcut} onPress={() => void openContext(context)}>
-                  {context.thumbnail ? (
-                    <Image source={{ uri: context.thumbnail }} style={styles.shortcutImage} contentFit="cover" />
-                  ) : (
-                    <PlaylistCover size={56} borderRadius={0} />
-                  )}
-                  <Text numberOfLines={2} style={styles.shortcutText}>{context.name}</Text>
-                  {loadingId === context.id ? <ActivityIndicator color="#FFFFFF" size="small" style={styles.shortcutLoader} /> : null}
-                </PressableCard>
+                <Text variant="captionStrong" numberOfLines={2} style={styles.shortcutText}>Liked Songs</Text>
+              </Tappable>
+              {shortcuts.map((c) => (
+                <Tappable key={`${c.type}-${c.id}`} style={styles.shortcut} onPress={() => openContext(c)} pressScale={0.97} accessibilityRole="button" accessibilityLabel={c.name}>
+                  {c.thumbnail ? <Image source={{ uri: c.thumbnail }} style={{ width: 56, height: 56 }} contentFit="cover" /> : <PlaylistCover size={56} borderRadius={0} />}
+                  <Text variant="captionStrong" numberOfLines={2} style={styles.shortcutText}>{c.name}</Text>
+                  {loadingId === c.id ? <ActivityIndicator color={colors.accentInk} size="small" style={{ marginRight: Space[2] }} /> : null}
+                </Tappable>
               ))}
-            </View>
+            </Rise>
 
-            {/* ── Featured Today ── */}
-            <View style={styles.section}>
-              <SectionHeader title="Featured Today" />
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                snapToInterval={FEATURED_CARD_WIDTH + 12}
-                decelerationRate="fast"
-                contentContainerStyle={styles.hScroll}
-              >
+            <Rise play={firstMount} index={section++} style={styles.section}>
+              <SectionHeader title="Featured today" subtitle="Hand-picked for this week" />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={FEATURED_WIDTH + Space[3]} decelerationRate="fast" contentContainerStyle={styles.hScroll}>
                 {FEATURED.map((item, index) => (
-                  <PressableCard
-                    key={item.youtube_id}
-                    style={styles.featuredCard}
-                    onPress={() => void playList(FEATURED, index, 'Featured Today')}
-                    onLongPress={() => openSongMenu(item)}
-                  >
-                    <Image
-                      source={{ uri: `https://i.ytimg.com/vi/${item.youtube_id}/hqdefault.jpg` }}
-                      style={StyleSheet.absoluteFillObject}
-                      contentFit="cover"
-                    />
-                    <LinearGradient
-                      colors={['transparent', 'rgba(0,0,0,0.45)', 'rgba(0,0,0,0.92)']}
-                      locations={[0, 0.45, 1]}
-                      style={StyleSheet.absoluteFillObject}
-                    />
-                    <View style={styles.featuredContent}>
-                      <View style={styles.flex}>
-                        <Text style={[styles.featuredBadge, index % 2 === 1 && styles.featuredBadgeGold]}>{item.badge}</Text>
-                        <Text numberOfLines={1} style={styles.featuredTitle}>{item.title}</Text>
-                        <Text numberOfLines={1} style={styles.featuredArtist}>{item.channel_name}</Text>
+                  <Tappable key={item.youtube_id} style={styles.featured} pressScale={0.98} onPress={() => void playList(FEATURED, index, 'Featured today')}
+                    onLongPress={() => openSongMenu(item)} accessibilityRole="button" accessibilityLabel={`${item.title}, ${item.channel_name}`}>
+                    <Image source={{ uri: playback.thumbnailFor(item.youtube_id) }} style={styles.fill} contentFit="cover" />
+                    <LinearGradient colors={['rgba(11,15,26,0)', 'rgba(11,15,26,0.55)', 'rgba(11,15,26,0.95)']} locations={[0.2, 0.55, 1]} style={styles.featuredShade} />
+                    <View style={styles.featuredBody}>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text variant="label" color={Brand.kesarLight}>{item.badge}</Text>
+                        <Text variant="headline" color="#FFFFFF" numberOfLines={1}>{item.title}</Text>
+                        <Text variant="caption" color="rgba(255,255,255,0.75)" numberOfLines={1}>{item.channel_name}</Text>
                       </View>
-                      <View style={styles.featuredPlayBtn}>
-                        {loadingId === item.youtube_id ? (
-                          <ActivityIndicator color="#FFFFFF" size="small" />
-                        ) : (
-                          <Ionicons name="play" size={18} color="#FFFFFF" style={{ marginLeft: 2 }} />
-                        )}
+                      <View style={styles.featuredPlay}>
+                        {loadingId === item.youtube_id ? <ActivityIndicator color={colors.onAccent} /> : <Ionicons name="play" size={20} color={colors.onAccent} style={{ marginLeft: 2 }} />}
                       </View>
                     </View>
-                  </PressableCard>
+                  </Tappable>
                 ))}
               </ScrollView>
-            </View>
+            </Rise>
 
-            {/* ── On Repeat ── */}
             {onRepeat.length >= 3 ? (
-              <View style={styles.section}>
-                <SectionHeader title="On Repeat" subtitle="Songs you can't stop playing" />
+              <Rise play={firstMount} index={section++} style={styles.section}>
+                <SectionHeader title="On repeat" subtitle="Songs you keep coming back to" />
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
-                  {onRepeat.map((song, index) => (
-                    <SongCard
-                      key={song.id}
-                      song={song}
-                      subtitle={`${song.plays} plays · ${song.channel_name ?? ''}`}
-                      isLoading={loadingId === song.youtube_id}
-                      onPress={() => void playList(onRepeat, index, 'On Repeat')}
-                    />
+                  {onRepeat.map((song, i) => (
+                    <SongCard key={song.id} song={song} subtitle={`${song.plays} plays`} loading={loadingId === song.youtube_id} onPress={() => void playList(onRepeat, i, 'On repeat')} />
                   ))}
                 </ScrollView>
-              </View>
+              </Rise>
             ) : null}
 
-            {/* ── Your mixes ── */}
             {mixes.length > 0 ? (
-              <View style={styles.section}>
-                <SectionHeader title="Your mixes" subtitle="Endless radio from the channels you play most" />
+              <Rise play={firstMount} index={section++} style={styles.section}>
+                <SectionHeader title="Your mixes" subtitle="Endless radio from the channels you love" />
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
                   {mixes.map((mix) => (
-                    <PressableCard key={mix.channel_name} style={styles.card} onPress={() => void playMix(mix.channel_name, mix.top_song)}>
-                      <View style={styles.cardThumbWrap}>
-                        <Image
-                          source={{ uri: mix.thumbnail_url ?? playback.thumbnailFor(mix.top_song.youtube_id) }}
-                          style={styles.cardThumb}
-                          contentFit="cover"
-                        />
-                        <LinearGradient colors={['transparent', 'rgba(124,58,237,0.85)']} style={styles.mixOverlay}>
-                          <Text numberOfLines={2} style={styles.mixLabel}>{mix.channel_name} Mix</Text>
+                    <Tappable key={mix.channel_name} style={{ width: CARD }} pressScale={0.96}
+                      onPress={() => void run(mix.top_song.youtube_id, () => playback.startRadio(mix.top_song, `${mix.channel_name} Mix`))}
+                      accessibilityRole="button" accessibilityLabel={`${mix.channel_name} Mix`}>
+                      <View style={styles.cardArt}>
+                        <Image source={{ uri: mix.thumbnail_url ?? playback.thumbnailFor(mix.top_song.youtube_id) }} style={styles.fill} contentFit="cover" />
+                        <LinearGradient colors={['rgba(11,15,26,0)', alpha(Brand.kesar, 0.92)]} locations={[0.35, 1]} style={styles.mixShade}>
+                          <Text variant="title" color={colors.onAccent} numberOfLines={2}>{mix.channel_name}</Text>
+                          <Text variant="label" color={colors.onAccent}>Mix</Text>
                         </LinearGradient>
-                        {loadingId === mix.top_song.youtube_id ? (
-                          <View style={styles.cardLoader}>
-                            <ActivityIndicator color="#FFFFFF" size="small" />
-                          </View>
-                        ) : null}
+                        {loadingId === mix.top_song.youtube_id ? <View style={styles.cardLoader}><ActivityIndicator color="#FFFFFF" /></View> : null}
                       </View>
-                      <Text numberOfLines={2} style={styles.cardSubtitle}>Based on {mix.top_song.title}</Text>
-                    </PressableCard>
+                      <Text variant="caption" color="textSecondary" numberOfLines={2}>Starts with {mix.top_song.title}</Text>
+                    </Tappable>
                   ))}
                 </ScrollView>
-              </View>
+              </Rise>
             ) : null}
 
-            {/* ── Quick Picks ── */}
-            <View style={styles.section}>
-              <SectionHeader title="Quick Picks" />
-              {likedQuery.isLoading ? (
-                <View style={styles.quickGrid}>
-                  {Array.from({ length: 6 }).map((_, i) => (
-                    <SkeletonLoader key={i} width={SHORTCUT_WIDTH} height={56} borderRadius={8} />
-                  ))}
-                </View>
-              ) : (
-                <View style={styles.quickGrid}>
-                  {quickPicks.map((song, index) => (
-                    <PressableCard
-                      key={song.id}
-                      style={styles.quickCard}
-                      onPress={() => void playList(quickPicks, index, 'Quick Picks')}
-                      onLongPress={() => openSongMenu(song)}
-                    >
-                      <Image source={{ uri: song.thumbnail_url ?? undefined }} style={styles.quickThumb} contentFit="cover" />
-                      <View style={styles.quickText}>
-                        <Text numberOfLines={1} style={styles.quickTitle}>{song.title}</Text>
-                        <Text numberOfLines={1} style={styles.quickSubtitle}>{song.channel_name || 'Unknown'}</Text>
-                      </View>
-                      {loadingId === song.youtube_id ? <ActivityIndicator color={Colors.primaryLight} size="small" /> : null}
-                    </PressableCard>
-                  ))}
-                </View>
-              )}
-            </View>
+            <Rise play={firstMount} index={section++} style={styles.section}>
+              <SectionHeader title="Quick picks" subtitle={(likedQuery.data?.length ?? 0) > 0 ? 'From your Liked Songs' : 'From the catalogue'} />
+              <View style={styles.quickGrid}>
+                {likedQuery.isLoading
+                  ? Array.from({ length: 6 }).map((_, i) => <SkeletonLoader key={i} width={SHORTCUT_WIDTH} height={56} borderRadius={Radius.sm} />)
+                  : quickPicks.map((song, i) => (
+                      <Tappable key={song.id} style={styles.quick} pressScale={0.97} onPress={() => void playList(quickPicks, i, 'Quick picks')}
+                        onLongPress={() => openSongMenu(song)} accessibilityRole="button" accessibilityLabel={`${song.title}, ${song.channel_name ?? ''}`}>
+                        <Image source={{ uri: song.thumbnail_url ?? undefined }} style={{ width: 56, height: 56 }} contentFit="cover" />
+                        <View style={{ flex: 1, minWidth: 0, paddingRight: Space[2] }}>
+                          <Text variant="captionStrong" numberOfLines={1}>{song.title}</Text>
+                          <Text variant="caption" color="textSecondary" numberOfLines={1}>{song.channel_name}</Text>
+                        </View>
+                        {loadingId === song.youtube_id ? <ActivityIndicator color={colors.accentInk} size="small" style={{ marginRight: Space[2] }} /> : null}
+                      </Tappable>
+                    ))}
+              </View>
+            </Rise>
 
-            {/* ── Recently played ── */}
-            <View style={styles.section}>
+            <Rise play={firstMount} index={section++} style={styles.section}>
               <SectionHeader title="Recently played" />
               {historyQuery.isLoading ? (
-                <View style={styles.hRow}>
-                  {[0, 1, 2].map((i) => (
-                    <SkeletonLoader key={i} width={CARD_SIZE} height={CARD_SIZE} borderRadius={8} />
-                  ))}
+                <View style={[styles.hScroll, { flexDirection: 'row' }]}>
+                  {[0, 1, 2].map((i) => <SkeletonLoader key={i} width={CARD} height={CARD} borderRadius={Radius.md} />)}
                 </View>
               ) : history.length === 0 ? (
-                <Text style={styles.emptyText}>Songs you play will show up here.</Text>
+                <Text variant="caption" color="textSecondary" style={{ paddingHorizontal: Layout.gutter }}>
+                  Songs you play will collect here, so you can find them again in one tap.
+                </Text>
               ) : (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
-                  {history.map((song, index) => (
-                    <SongCard
-                      key={song.id}
-                      song={song}
-                      isLoading={loadingId === song.youtube_id}
-                      onPress={() => void playList(history, index, 'Recently played')}
-                    />
+                  {history.map((song, i) => (
+                    <SongCard key={song.id} song={song} loading={loadingId === song.youtube_id} onPress={() => void playList(history, i, 'Recently played')} />
                   ))}
                 </ScrollView>
               )}
-            </View>
+            </Rise>
 
-            {/* ── Stats entry ── */}
-            <PressableCard style={styles.statsCard} onPress={() => rootNavigation?.navigate('Stats')}>
-              <LinearGradient colors={['#4C1D95', '#7C3AED']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFillObject} />
-              <Ionicons name="stats-chart" size={28} color="#FFFFFF" />
-              <View style={styles.flex}>
-                <Text style={styles.statsTitle}>Your listening stats</Text>
-                <Text style={styles.statsSubtitle}>Top songs and channels, this month and all time</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
-            </PressableCard>
+            <Rise play={firstMount} index={section++} style={{ paddingHorizontal: Layout.gutter }}>
+              <Tappable style={styles.stats} pressScale={0.98} onPress={() => root?.navigate('Stats')} accessibilityRole="button" accessibilityLabel="Your listening stats">
+                <LinearGradient colors={[Brand.kesar, '#D9466B', Brand.neelDeep]} locations={[0, 0.55, 1]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.fillAbs} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text variant="label" color="rgba(255,255,255,0.85)">Your listening</Text>
+                  <Text variant="headline" color="#FFFFFF">Top songs and channels</Text>
+                  <Text variant="caption" color="rgba(255,255,255,0.85)">This month, this year and all time</Text>
+                </View>
+                <Ionicons name="arrow-forward" size={22} color="#FFFFFF" />
+              </Tappable>
+            </Rise>
           </>
         )}
       </ScrollView>
@@ -489,308 +353,47 @@ export default function HomeScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    backgroundColor: Colors.background,
-    flex: 1,
-  },
-  content: {
-    paddingTop: 8,
-  },
-  flex: {
-    flex: 1,
-  },
-
-  // ── Header + chips ──
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 16,
-    paddingLeft: CONTENT_PADDING,
-  },
-  avatar: {
-    alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 999,
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
-  },
-  avatarText: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '700',
-  },
-  chipsRow: {
-    gap: 8,
-    paddingRight: CONTENT_PADDING,
-  },
-  chip: {
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  chipSelected: {
-    backgroundColor: Colors.primary,
-  },
-  chipText: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  greeting: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.heading,
-    fontWeight: '700',
-    marginBottom: 12,
-    paddingHorizontal: CONTENT_PADDING,
-  },
-
-  // ── Shortcut grid ──
-  shortcutGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 24,
-    paddingHorizontal: CONTENT_PADDING,
-  },
+const useStyles = makeStyles((t) => ({
+  root: { backgroundColor: t.colors.bg, flex: 1 },
+  wash: { height: 320, left: 0, position: 'absolute', right: 0, top: 0 },
+  fill: { height: '100%', width: '100%' },
+  fillAbs: { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
+  header: { alignItems: 'center', flexDirection: 'row', gap: Space[4], paddingBottom: Space[4], paddingHorizontal: Layout.gutter, paddingTop: Space[3] },
+  avatar: { alignItems: 'center', backgroundColor: t.colors.accent, borderRadius: Radius.pill, height: Layout.touchTarget, justifyContent: 'center', width: Layout.touchTarget },
+  chips: { gap: Space[2], paddingBottom: Space[5], paddingHorizontal: Layout.gutter },
+  shortcuts: { flexDirection: 'row', flexWrap: 'wrap', gap: Space[2], marginBottom: Space[8], paddingHorizontal: Layout.gutter },
   shortcut: {
     alignItems: 'center',
-    backgroundColor: Colors.surfaceHighlight,
-    borderRadius: 8,
+    backgroundColor: t.colors.surface,
+    borderRadius: Radius.sm,
     flexDirection: 'row',
-    gap: 8,
+    gap: Space[3],
     height: 56,
     overflow: 'hidden',
     width: SHORTCUT_WIDTH,
+    ...(t.isDark ? {} : Elevation.card),
   },
-  shortcutImage: {
-    height: 56,
-    width: 56,
-  },
-  shortcutText: {
-    color: '#FFFFFF',
-    flex: 1,
-    fontSize: TypeScale.small,
-    fontWeight: '700',
-    paddingRight: 8,
-  },
-  shortcutLoader: {
-    position: 'absolute',
-    right: 8,
-  },
-
-  // ── Sections ──
-  section: {
-    marginBottom: 28,
-  },
-  sectionHeader: {
-    marginBottom: 12,
-    paddingHorizontal: CONTENT_PADDING,
-  },
-  sectionTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.heading,
-    fontWeight: '700',
-  },
-  sectionSubtitle: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    marginTop: 2,
-  },
-  hScroll: {
-    gap: 12,
-    paddingHorizontal: CONTENT_PADDING,
-  },
-  hRow: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: CONTENT_PADDING,
-  },
-  emptyText: {
-    color: Colors.textMuted,
-    fontSize: TypeScale.small,
-    paddingHorizontal: CONTENT_PADDING,
-  },
-
-  // ── Featured ──
-  featuredCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 16,
-    height: FEATURED_CARD_HEIGHT,
-    overflow: 'hidden',
-    width: FEATURED_CARD_WIDTH,
-  },
-  featuredContent: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'flex-end',
-    flexDirection: 'row',
-    gap: 12,
-    padding: 16,
-  },
-  featuredBadge: {
-    color: Colors.primaryLight,
-    fontSize: TypeScale.caption,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  featuredBadgeGold: {
-    color: Colors.secondary,
-  },
-  featuredTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.large,
-    fontWeight: '700',
-  },
-  featuredArtist: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    marginTop: 2,
-  },
-  featuredPlayBtn: {
+  shortcutText: { flex: 1, paddingRight: Space[2] },
+  section: { marginBottom: Space[8] },
+  hScroll: { gap: Space[3], paddingHorizontal: Layout.gutter },
+  featured: { backgroundColor: t.colors.surface, borderRadius: Radius.lg, height: 208, overflow: 'hidden', width: FEATURED_WIDTH },
+  featuredShade: { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
+  featuredBody: { alignItems: 'flex-end', bottom: 0, flexDirection: 'row', gap: Space[3], left: 0, padding: Space[5], position: 'absolute', right: 0 },
+  featuredPlay: { alignItems: 'center', backgroundColor: t.colors.accent, borderRadius: Radius.pill, height: 48, justifyContent: 'center', width: 48 },
+  cardArt: { backgroundColor: t.colors.surfaceRaised, borderRadius: Radius.md, height: CARD, marginBottom: Space[2], overflow: 'hidden', width: CARD },
+  cardLoader: { alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.45)', bottom: 0, justifyContent: 'center', left: 0, position: 'absolute', right: 0, top: 0 },
+  mixShade: { bottom: 0, justifyContent: 'flex-end', left: 0, padding: Space[3], position: 'absolute', right: 0, top: 0 },
+  quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Space[2], paddingHorizontal: Layout.gutter },
+  quick: {
     alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 999,
-    height: 44,
-    justifyContent: 'center',
-    width: 44,
-  },
-
-  // ── Cards ──
-  card: {
-    width: CARD_SIZE,
-  },
-  cardThumbWrap: {
-    borderRadius: 8,
-    height: CARD_SIZE,
-    marginBottom: 8,
-    overflow: 'hidden',
-    width: CARD_SIZE,
-  },
-  cardThumb: {
-    height: CARD_SIZE,
-    width: CARD_SIZE,
-  },
-  cardLoader: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-  },
-  cardTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  cardSubtitle: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    marginTop: 2,
-  },
-  mixOverlay: {
-    bottom: 0,
-    justifyContent: 'flex-end',
-    left: 0,
-    padding: 10,
-    position: 'absolute',
-    right: 0,
-    top: '40%',
-  },
-  mixLabel: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.body,
-    fontWeight: '800',
-  },
-
-  // ── Quick picks ──
-  quickGrid: {
+    backgroundColor: t.colors.surface,
+    borderRadius: Radius.sm,
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    paddingHorizontal: CONTENT_PADDING,
-  },
-  quickCard: {
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderRadius: 8,
-    flexDirection: 'row',
-    gap: 10,
+    gap: Space[3],
     height: 56,
     overflow: 'hidden',
-    paddingRight: 8,
     width: SHORTCUT_WIDTH,
+    ...(t.isDark ? {} : Elevation.card),
   },
-  quickThumb: {
-    height: 56,
-    width: 56,
-  },
-  quickText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  quickTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  quickSubtitle: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.caption,
-    marginTop: 2,
-  },
-
-  // ── Genre view ──
-  genreHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 8,
-    paddingHorizontal: CONTENT_PADDING,
-  },
-  genreTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.display,
-    fontWeight: '700',
-  },
-  genreShuffle: {
-    alignItems: 'center',
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: 999,
-    height: 40,
-    justifyContent: 'center',
-    width: 40,
-  },
-  genrePlay: {
-    alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 999,
-    height: 52,
-    justifyContent: 'center',
-    width: 52,
-  },
-
-  // ── Stats card ──
-  statsCard: {
-    alignItems: 'center',
-    borderRadius: 16,
-    flexDirection: 'row',
-    gap: 16,
-    marginBottom: 16,
-    marginHorizontal: CONTENT_PADDING,
-    overflow: 'hidden',
-    padding: 20,
-  },
-  statsTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.large,
-    fontWeight: '700',
-  },
-  statsSubtitle: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: TypeScale.small,
-    marginTop: 2,
-  },
-});
+  stats: { alignItems: 'center', borderRadius: Radius.lg, flexDirection: 'row', gap: Space[4], overflow: 'hidden', padding: Space[5] },
+}));

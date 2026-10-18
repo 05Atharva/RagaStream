@@ -1,19 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  useWindowDimensions,
-  View,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import Toast from 'react-native-toast-message';
+import { ActivityIndicator, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
+import Toast from '../services/toast';
 import AnimatedBottomSheet from './AnimatedBottomSheet';
 import PlaylistCover from './PlaylistCover';
-import { Colors, TypeScale } from '../constants/theme';
+import Button from './ui/Button';
+import CheckMark from './ui/CheckMark';
+import SheetRow, { SheetHeader } from './ui/SheetRow';
+import Text from './ui/Text';
+import { Radius, Space, Type } from '../constants/theme';
+import { makeStyles, useColors } from '../theme/ThemeProvider';
 import { usePlaylists, usePlaylistsContaining } from '../hooks/usePlaylists';
 import { useIsLiked } from '../hooks/useLiked';
 import {
@@ -34,11 +29,13 @@ type SaveToSheetProps = {
 };
 
 /**
- * Spotify's "Saved in" sheet: Liked Songs and every playlist with a check
- * showing where the song already lives. Toggle any number, then Done applies
- * the difference — duplicates are impossible by construction.
+ * "Save to": Liked Songs and every playlist, ticked where the song already
+ * lives. Toggle any number, then Done applies the difference, so duplicates
+ * are impossible by construction (US-09).
  */
 export default function SaveToSheet({ isVisible, onClose, song }: SaveToSheetProps) {
+  const styles = useStyles();
+  const colors = useColors();
   const { height } = useWindowDimensions();
   const youtubeId = song?.youtube_id;
   const isLiked = useIsLiked(youtubeId);
@@ -54,7 +51,6 @@ export default function SaveToSheet({ isVisible, onClose, song }: SaveToSheetPro
 
   const initialSelected = useMemo(() => new Set(containingQuery.data ?? []), [containingQuery.data]);
 
-  // Seed local check state each time the sheet opens, once data is in.
   useEffect(() => {
     if (!isVisible) {
       setInitialised(false);
@@ -72,10 +68,10 @@ export default function SaveToSheet({ isVisible, onClose, song }: SaveToSheetPro
   const toggle = (playlistId: string) => {
     tapHaptic();
     setSelected((current) => {
-      const nextSet = new Set(current);
-      if (nextSet.has(playlistId)) nextSet.delete(playlistId);
-      else nextSet.add(playlistId);
-      return nextSet;
+      const next = new Set(current);
+      if (next.has(playlistId)) next.delete(playlistId);
+      else next.add(playlistId);
+      return next;
     });
   };
 
@@ -88,7 +84,7 @@ export default function SaveToSheet({ isVisible, onClose, song }: SaveToSheetPro
       setIsCreating(false);
       setNewName('');
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not create playlist' });
+      Toast.show({ type: 'error', text1: "Couldn't create the playlist", text2: 'Check your connection and try again.' });
     }
   };
 
@@ -121,219 +117,91 @@ export default function SaveToSheet({ isVisible, onClose, song }: SaveToSheetPro
       successHaptic();
       onClose();
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not save changes' });
+      Toast.show({ type: 'error', text1: "Couldn't save your changes", text2: 'Nothing was changed. Try again.' });
     } finally {
       setIsSaving(false);
     }
   };
 
   const playlists = playlistsQuery.data ?? [];
-  const isLoading = !initialised;
 
   return (
     <AnimatedBottomSheet isVisible={isVisible} onClose={onClose}>
       <View style={styles.container}>
-        <View style={styles.headerRow}>
-          <Text style={styles.title}>Save to</Text>
-          <Pressable onPress={() => setIsCreating((v) => !v)} style={styles.newButton} hitSlop={8}>
-            <Ionicons name="add" size={18} color={Colors.onBackground} />
-            <Text style={styles.newButtonText}>New playlist</Text>
-          </Pressable>
-        </View>
+        <SheetHeader
+          title="Save to"
+          subtitle={song?.title}
+          right={<Button label="New playlist" icon="add" size="sm" variant="secondary" onPress={() => setIsCreating((v) => !v)} />}
+        />
 
-        {isCreating && (
+        {isCreating ? (
           <View style={styles.createRow}>
             <TextInput
               value={newName}
               onChangeText={setNewName}
-              placeholder="Playlist name"
-              placeholderTextColor={Colors.textMuted}
+              placeholder="Name your playlist"
+              placeholderTextColor={colors.textTertiary}
               style={styles.createInput}
               autoFocus
               returnKeyType="done"
               onSubmitEditing={() => void handleCreate()}
+              accessibilityLabel="New playlist name"
             />
-            <Pressable onPress={() => void handleCreate()} style={styles.createConfirm}>
-              <Text style={styles.createConfirmText}>Create</Text>
-            </Pressable>
+            <Button label="Create" size="md" onPress={() => void handleCreate()} disabled={!newName.trim()} />
           </View>
-        )}
+        ) : null}
 
-        {isLoading ? (
-          <ActivityIndicator color={Colors.primary} style={styles.loader} />
+        {!initialised ? (
+          <ActivityIndicator color={colors.accentInk} style={styles.loader} />
         ) : (
           <ScrollView style={{ maxHeight: height * 0.5 }} showsVerticalScrollIndicator={false}>
-            <SaveRow
-              title="Liked Songs"
-              subtitle="Your favourites"
-              checked={likedSelected}
+            <SheetRow
+              label="Liked Songs"
+              detail="Your favourites"
               onPress={() => {
                 tapHaptic();
                 setLikedSelected((v) => !v);
               }}
-              cover={<PlaylistCover variant="liked" size={48} />}
+              leading={<PlaylistCover variant="liked" size={44} borderRadius={Radius.sm} />}
+              trailing={<CheckMark checked={likedSelected} />}
             />
             {playlists.map((playlist) => (
-              <SaveRow
+              <SheetRow
                 key={playlist.id}
-                title={playlist.name}
-                subtitle={`${playlist.song_count ?? 0} songs`}
-                checked={selected.has(playlist.id)}
+                label={playlist.name}
+                detail={`${playlist.song_count ?? 0} songs`}
                 onPress={() => toggle(playlist.id)}
-                cover={<PlaylistCover thumbnails={playlist.cover_thumbnails} size={48} />}
+                leading={<PlaylistCover thumbnails={playlist.cover_thumbnails} size={44} borderRadius={Radius.sm} />}
+                trailing={<CheckMark checked={selected.has(playlist.id)} />}
               />
             ))}
-            {playlists.length === 0 && (
-              <Text style={styles.emptyText}>No playlists yet — create one above.</Text>
-            )}
+            {playlists.length === 0 ? (
+              <Text variant="caption" color="textSecondary" align="center" style={styles.empty}>
+                No playlists yet. Tap New playlist to start one.
+              </Text>
+            ) : null}
           </ScrollView>
         )}
 
-        <Pressable
-          onPress={() => void handleDone()}
-          disabled={isSaving || isLoading}
-          style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
-        >
-          {isSaving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.doneText}>Done</Text>}
-        </Pressable>
+        <Button label="Done" size="lg" onPress={() => void handleDone()} loading={isSaving} disabled={!initialised} fullWidth style={styles.done} />
       </View>
     </AnimatedBottomSheet>
   );
 }
 
-function SaveRow({
-  title,
-  subtitle,
-  checked,
-  onPress,
-  cover,
-}: {
-  title: string;
-  subtitle: string;
-  checked: boolean;
-  onPress: () => void;
-  cover: React.ReactNode;
-}) {
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
-      {cover}
-      <View style={styles.rowText}>
-        <Text numberOfLines={1} style={styles.rowTitle}>{title}</Text>
-        <Text numberOfLines={1} style={styles.rowSubtitle}>{subtitle}</Text>
-      </View>
-      <Ionicons
-        name={checked ? 'checkmark-circle' : 'ellipse-outline'}
-        size={24}
-        color={checked ? Colors.primary : 'rgba(255,255,255,0.45)'}
-      />
-    </Pressable>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    paddingBottom: 16,
-    paddingHorizontal: 16,
-  },
-  headerRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  title: {
-    color: Colors.onBackground,
-    fontSize: TypeScale.title,
-    fontWeight: '700',
-  },
-  newButton: {
-    alignItems: 'center',
-    borderColor: 'rgba(255,255,255,0.3)',
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  newButtonText: {
-    color: Colors.onBackground,
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  createRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
+const useStyles = makeStyles((t) => ({
+  container: { paddingBottom: Space[3], paddingHorizontal: Space[3] },
+  createRow: { alignItems: 'center', flexDirection: 'row', gap: Space[2], marginBottom: Space[3], paddingHorizontal: Space[2] },
   createInput: {
-    backgroundColor: Colors.surfaceHighlight,
-    borderRadius: 8,
-    color: Colors.onBackground,
+    ...Type.body,
+    backgroundColor: t.colors.surfaceRaised,
+    borderRadius: Radius.sm,
+    color: t.colors.text,
     flex: 1,
-    fontSize: TypeScale.body,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    height: 44,
+    paddingHorizontal: Space[3],
   },
-  createConfirm: {
-    backgroundColor: Colors.primary,
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  createConfirmText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
-  loader: {
-    marginVertical: 32,
-  },
-  row: {
-    alignItems: 'center',
-    borderRadius: 8,
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 4,
-    paddingVertical: 8,
-  },
-  rowPressed: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
-  },
-  rowText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  rowTitle: {
-    color: Colors.onBackground,
-    fontSize: TypeScale.body,
-  },
-  rowSubtitle: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    marginTop: 2,
-  },
-  emptyText: {
-    color: Colors.textMuted,
-    paddingVertical: 16,
-    textAlign: 'center',
-  },
-  doneButton: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 999,
-    marginTop: 16,
-    minWidth: 140,
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-  },
-  pressed: {
-    transform: [{ scale: 0.97 }],
-  },
-  doneText: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.body,
-    fontWeight: '700',
-  },
-});
+  loader: { marginVertical: Space[8] },
+  empty: { paddingVertical: Space[4] },
+  done: { marginHorizontal: Space[2], marginTop: Space[4] },
+}));

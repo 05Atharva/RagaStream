@@ -1,36 +1,16 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { View } from 'react-native';
+import { Space } from '../constants/theme';
+import { useColors } from '../theme/ThemeProvider';
+import Text from './ui/Text';
 
-interface AuthDividerProps {
-  label?: string;
-}
-
-export default function AuthDivider({ label = 'OR' }: AuthDividerProps) {
+export default function AuthDivider({ label = 'or' }: { label?: string }) {
+  const colors = useColors();
   return (
-    <View style={styles.row}>
-      <View style={styles.line} />
-      <Text style={styles.text}>{label}</Text>
-      <View style={styles.line} />
+    <View style={{ alignItems: 'center', flexDirection: 'row', gap: Space[3] }}>
+      <View style={{ backgroundColor: colors.border, flex: 1, height: 1 }} />
+      <Text variant="caption" color="textTertiary">{label}</Text>
+      <View style={{ backgroundColor: colors.border, flex: 1, height: 1 }} />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginVertical: 4,
-  },
-  line: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-  },
-  text: {
-    color: 'rgba(255,255,255,0.45)',
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 1,
-  },
-});

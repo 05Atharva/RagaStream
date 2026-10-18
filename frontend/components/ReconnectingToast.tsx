@@ -1,116 +1,76 @@
 import React, { useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 import Animated, {
   Easing,
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import SafeBlurView from './SafeBlurView';
-
-// Circumference of r=5.5 circle ≈ 34.6; draw ~75% (26px) with 9px gap
-const ARC_DASH: [number, number] = [26, 9];
+import { Motion, Radius, Space } from '../constants/theme';
+import { useColors } from '../theme/ThemeProvider';
+import Text from './ui/Text';
 
 type Props = {
   visible: boolean;
 };
 
+/**
+ * Shown while a dropped stream is being re-fetched. Drops in from the top on
+ * `out`, leaves on `in`; the arc spinner is the only loop (a loading state).
+ */
 export default function ReconnectingToast({ visible }: Props) {
-  const opacity = useSharedValue(0);
-  const translateY = useSharedValue(-12);
-  const spinVal = useSharedValue(0);
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const show = useSharedValue(0);
+  const spin = useSharedValue(0);
 
-  // Spinner rotates continuously, independent of visibility
   useEffect(() => {
-    spinVal.value = withRepeat(
-      withTiming(360, { duration: 800, easing: Easing.linear }),
-      -1,
-    );
-  }, [spinVal]);
-
-  // Entrance / exit driven entirely by `visible`
-  useEffect(() => {
+    show.value = withTiming(visible ? 1 : 0, {
+      duration: visible ? Motion.duration.glide : Motion.duration.base,
+      easing: visible ? Motion.easing.out : Motion.easing.in,
+    });
     if (visible) {
-      opacity.value = withSpring(1, { damping: 20 });
-      translateY.value = withSpring(0, { damping: 20 });
+      spin.value = 0;
+      spin.value = withRepeat(withTiming(360, { duration: 900, easing: Easing.linear }), -1);
     } else {
-      opacity.value = withTiming(0, { duration: 250 });
-      translateY.value = withTiming(-12, { duration: 250 });
+      cancelAnimation(spin);
     }
-  }, [visible, opacity, translateY]);
+  }, [show, spin, visible]);
 
-  const containerStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-    transform: [{ translateY: translateY.value }],
+  const wrapStyle = useAnimatedStyle(() => ({
+    opacity: show.value,
+    transform: [{ translateY: (show.value - 1) * 16 }],
   }));
-
-  const spinnerStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${spinVal.value}deg` }],
-  }));
+  const spinStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${spin.value}deg` }] }));
 
   return (
-    <Animated.View pointerEvents="none" style={[styles.wrapper, containerStyle]}>
-      <View style={styles.pill}>
-        {/* Blur layer — clipped by pill's overflow:hidden + borderRadius */}
-        <SafeBlurView
-          blurAmount={24}
-          blurType="dark"
-          reducedTransparencyFallbackColor="#121414"
-          style={StyleSheet.absoluteFillObject}
-        />
-        {/* Glass tint + content row */}
-        <View style={styles.content}>
-          <Animated.View style={spinnerStyle}>
-            <Svg width={16} height={16} viewBox="0 0 16 16">
-              <Circle
-                cx="8"
-                cy="8"
-                r="5.5"
-                fill="none"
-                stroke="#7C3AED"
-                strokeWidth={2}
-                strokeDasharray={ARC_DASH}
-                strokeLinecap="round"
-              />
-            </Svg>
-          </Animated.View>
-          <Text style={styles.label}>RECONNECTING...</Text>
-        </View>
+    <Animated.View
+      pointerEvents="none"
+      accessibilityLiveRegion="polite"
+      style={[{ position: 'absolute', top: insets.top + Space[2], left: 0, right: 0, alignItems: 'center', zIndex: 20 }, wrapStyle]}
+    >
+      <View
+        style={{
+          alignItems: 'center',
+          backgroundColor: colors.text,
+          borderRadius: Radius.pill,
+          flexDirection: 'row',
+          gap: Space[2],
+          paddingHorizontal: Space[4],
+          paddingVertical: Space[2],
+        }}
+      >
+        <Animated.View style={spinStyle}>
+          <Svg width={14} height={14} viewBox="0 0 14 14">
+            <Circle cx={7} cy={7} r={5.5} stroke={colors.accent} strokeWidth={2} fill="none" strokeDasharray="26 9" strokeLinecap="round" />
+          </Svg>
+        </Animated.View>
+        <Text variant="captionStrong" color={colors.bg}>Reconnecting…</Text>
       </View>
     </Animated.View>
   );
 }
-
-const styles = StyleSheet.create({
-  wrapper: {
-    alignItems: 'center',
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    top: 8,
-    zIndex: 999,
-  },
-  pill: {
-    borderColor: 'rgba(255,255,255,0.10)',
-    borderRadius: 999,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  content: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(18,20,20,0.70)',
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  label: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 1.2,
-  },
-});

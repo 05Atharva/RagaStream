@@ -1,5 +1,8 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../services/apiClient';
+import { mix } from '../constants/theme';
+import { useTheme } from '../theme/ThemeProvider';
 
 export type ArtworkPalette = {
   accent: string;     // vivid — highlights
@@ -7,11 +10,11 @@ export type ArtworkPalette = {
   muted: string;      // near-black tint — mini player, deep surfaces
 };
 
-// Brand purple, used until (or if) a thumbnail's colour can't be read.
+// Kesar-derived, used until (or if) a thumbnail's colour can't be read.
 export const DEFAULT_PALETTE: ArtworkPalette = {
-  accent: '#7C3AED',
-  background: '#2A1650',
-  muted: '#160B2B',
+  accent: '#FF7A1A',
+  background: '#3A2414',
+  muted: '#1B130D',
 };
 
 /**
@@ -34,4 +37,21 @@ export function useArtworkColor(url: string | null | undefined): ArtworkPalette 
     },
   });
   return data ?? DEFAULT_PALETTE;
+}
+
+/**
+ * Hero / collapsed-bar colours derived from artwork, correct for the theme:
+ * dark → deep tint fading into Ink; light → pale wash fading into Porcelain.
+ */
+export function useHeroTint(palette: ArtworkPalette) {
+  const { isDark, colors } = useTheme();
+  return useMemo(
+    () => ({
+      top: isDark ? palette.background : mix(palette.accent, colors.bg, 0.72),
+      bar: isDark ? palette.muted : mix(palette.accent, colors.bg, 0.86),
+      ink: isDark ? '#FFFFFF' : colors.text,
+      inkDim: isDark ? 'rgba(255,255,255,0.72)' : colors.textSecondary,
+    }),
+    [colors.bg, colors.text, colors.textSecondary, isDark, palette.accent, palette.background, palette.muted]
+  );
 }

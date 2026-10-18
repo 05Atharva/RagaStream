@@ -1,330 +1,96 @@
-import React, { useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
+import React, { useRef, useState } from 'react';
+import { Pressable, TextInput } from 'react-native';
 import { supabase } from '../services/supabase';
-import Logo from '../components/Logo';
+import { signInWithGoogle } from '../services/googleAuth';
+import { showModal } from '../components/AppModal';
 import AuthDivider from '../components/AuthDivider';
+import AuthLayout from '../components/AuthLayout';
 import GoogleButton from '../components/GoogleButton';
+import Button from '../components/ui/Button';
+import Text from '../components/ui/Text';
+import TextField from '../components/ui/TextField';
 
 type SignupScreenProps = {
   onSwitchToLogin: () => void;
 };
 
-// ---------------------------------------------------------------------------
-// Google Sign-In: try to load the native module — in Expo Go it won't exist.
-// ---------------------------------------------------------------------------
-let GoogleSignin: typeof import('@react-native-google-signin/google-signin').GoogleSignin | null = null;
-let statusCodes: typeof import('@react-native-google-signin/google-signin').statusCodes | null = null;
-
-try {
-  const gsi = require('@react-native-google-signin/google-signin');
-  GoogleSignin = gsi.GoogleSignin;
-  statusCodes = gsi.statusCodes;
-} catch {
-  // Native module unavailable (Expo Go) — Google sign-in button shows an Alert.
-}
-
-// Arrow icon for the CTA button
-function ArrowIcon() {
-  return (
-    <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
-      <Path d="M5 12h14M12 5l7 7-7 7" stroke="#FFFFFF" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-    </Svg>
-  );
-}
+type Errors = { name?: string; email?: string; password?: string; confirm?: string };
 
 export default function SignupScreen({ onSwitchToLogin }: SignupScreenProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [errors, setErrors] = useState<Errors>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const emailRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInput>(null);
+  const confirmRef = useRef<TextInput>(null);
+
+  const clear = (key: keyof Errors) => errors[key] && setErrors((e) => ({ ...e, [key]: undefined }));
 
   const handleSignup = async () => {
+    const next: Errors = {};
+    if (!name.trim()) next.name = 'What should we call you?';
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) next.email = 'Enter a valid email address.';
+    if (password.length < 6) next.password = 'Use at least 6 characters.';
+    if (confirm !== password) next.confirm = "The passwords don't match.";
+    setErrors(next);
+    if (Object.keys(next).length) return;
     if (!supabase) {
-      Alert.alert('Auth unavailable', 'Supabase environment variables are missing.');
+      showModal({ title: "Sign-up isn't set up", message: 'Supabase keys are missing from this build.', icon: 'alert-circle-outline', tone: 'danger' });
       return;
     }
-
-    if (!name.trim() || !email.trim() || !password || !confirmPassword) {
-      Alert.alert('Missing fields', 'Fill in every field.');
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      Alert.alert('Password mismatch', 'Your password confirmation does not match.');
-      return;
-    }
-
     setIsLoading(true);
-
-    const { error } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: {
-        data: {
-          name: name.trim(),
-        },
-      },
-    });
-
+    const { error, data } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { name: name.trim() } } });
     setIsLoading(false);
-
     if (error) {
-      Alert.alert('Sign up failed', error.message);
+      setErrors({ email: error.message });
       return;
     }
-
-    Alert.alert('Account created', 'Your account is ready. You can continue into the app.');
+    if (!data.session) {
+      showModal({
+        title: 'Confirm your email',
+        message: `We sent a link to ${email.trim()}. Open it to finish creating your account.`,
+        icon: 'mail-open-outline',
+        actions: [{ label: 'Go to sign in', onPress: onSwitchToLogin }],
+      });
+    }
   };
 
-  const handleGoogleSignup = async () => {
-    if (!GoogleSignin || !statusCodes) {
-      Alert.alert(
-        'Native build required',
-        'Google Sign-In requires a native build (EAS). Run: npx expo run:android'
-      );
-      return;
-    }
-
-    if (!supabase) {
-      Alert.alert('Auth unavailable', 'Supabase environment variables are missing.');
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      await GoogleSignin.hasPlayServices();
-      const userInfo = await GoogleSignin.signIn();
-
-      const idToken = userInfo.data?.idToken;
-      if (!idToken) {
-        Alert.alert('Google sign up failed', 'No ID token received from Google.');
-        setIsLoading(false);
-        return;
-      }
-
-      // signInWithIdToken creates the account if it doesn't exist
-      const { error } = await supabase.auth.signInWithIdToken({
-        provider: 'google',
-        token: idToken,
-      });
-
-      if (error) {
-        Alert.alert('Google sign up failed', error.message);
-      }
-    } catch (err: unknown) {
-      const code = (err as { code?: string })?.code;
-      if (code === statusCodes.SIGN_IN_CANCELLED) {
-        // User cancelled — do nothing
-      } else if (code === statusCodes.IN_PROGRESS) {
-        // Already in progress
-      } else if (code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-        Alert.alert('Error', 'Google Play Services not available on this device.');
-      } else {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        Alert.alert('Google sign up failed', message);
-      }
-    } finally {
-      setIsLoading(false);
-    }
+  const handleGoogle = async () => {
+    setIsGoogleLoading(true);
+    const result = await signInWithGoogle();
+    setIsGoogleLoading(false);
+    if (!result.ok && !result.cancelled) showModal({ title: result.title, message: result.message, icon: 'logo-google' });
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Logo — circle container on signup */}
-          <View style={styles.logoSection}>
-            <View style={styles.logoCircle}>
-              <Logo size={56} />
-            </View>
-            <Text style={styles.heading}>Create Account</Text>
-          </View>
-
-          {/* Form */}
-          <View style={styles.form}>
-            <GoogleButton
-              label="Sign up with Google"
-              onPress={handleGoogleSignup}
-              disabled={isLoading}
-            />
-
-            <AuthDivider label="or" />
-
-            <TextInput
-              autoCapitalize="words"
-              placeholder="Name"
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              style={styles.input}
-              value={name}
-              onChangeText={setName}
-            />
-
-            <TextInput
-              autoCapitalize="none"
-              autoComplete="email"
-              keyboardType="email-address"
-              placeholder="Email"
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              style={styles.input}
-              value={email}
-              onChangeText={setEmail}
-            />
-
-            <TextInput
-              autoCapitalize="none"
-              autoComplete="password"
-              placeholder="Password"
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              secureTextEntry
-              style={styles.input}
-              value={password}
-              onChangeText={setPassword}
-            />
-
-            <TextInput
-              autoCapitalize="none"
-              autoComplete="password"
-              placeholder="Confirm Password"
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              secureTextEntry
-              style={styles.input}
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-            />
-
-            {/* Primary CTA */}
-            <Pressable
-              style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
-              onPress={handleSignup}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <View style={styles.primaryButtonInner}>
-                  <Text style={styles.primaryButtonText}>Create Account</Text>
-                  <ArrowIcon />
-                </View>
-              )}
-            </Pressable>
-          </View>
-
-          {/* Footer */}
-          <Pressable onPress={onSwitchToLogin} disabled={isLoading} style={styles.footer}>
-            <Text style={styles.footerText}>
-              {'Already have an account? '}
-              <Text style={styles.footerLink}>Log In</Text>
-            </Text>
-          </Pressable>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+    <AuthLayout
+      title="Make it yours"
+      subtitle="Your playlists, likes and radio, saved to one account."
+      footer={
+        <Pressable onPress={onSwitchToLogin} hitSlop={10} accessibilityRole="button">
+          <Text variant="body" color="textSecondary">
+            Already have an account? <Text variant="bodyStrong" color="accentInk">Sign in</Text>
+          </Text>
+        </Pressable>
+      }
+    >
+      <GoogleButton label="Continue with Google" onPress={() => void handleGoogle()} loading={isGoogleLoading} disabled={isLoading} />
+      <AuthDivider />
+      <TextField label="Name" icon="person-outline" value={name} onChangeText={(v) => { setName(v); clear('name'); }} error={errors.name}
+        placeholder="Aditi" autoComplete="name" returnKeyType="next" onSubmitEditing={() => emailRef.current?.focus()} />
+      <TextField ref={emailRef} label="Email" icon="mail-outline" value={email} onChangeText={(v) => { setEmail(v); clear('email'); }} error={errors.email}
+        placeholder="you@example.com" autoCapitalize="none" autoComplete="email" keyboardType="email-address" returnKeyType="next"
+        onSubmitEditing={() => passwordRef.current?.focus()} />
+      <TextField ref={passwordRef} label="Password" icon="lock-closed-outline" secure value={password} onChangeText={(v) => { setPassword(v); clear('password'); }}
+        error={errors.password} placeholder="At least 6 characters" autoCapitalize="none" autoComplete="new-password" returnKeyType="next"
+        onSubmitEditing={() => confirmRef.current?.focus()} />
+      <TextField ref={confirmRef} label="Confirm password" icon="lock-closed-outline" secure value={confirm} onChangeText={(v) => { setConfirm(v); clear('confirm'); }}
+        error={errors.confirm} placeholder="Type it again" autoCapitalize="none" returnKeyType="go" onSubmitEditing={() => void handleSignup()} />
+      <Button label="Create account" size="lg" fullWidth loading={isLoading} disabled={isGoogleLoading} onPress={() => void handleSignup()} />
+    </AuthLayout>
   );
 }
-
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  flex: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: 48,
-    paddingBottom: 32,
-    gap: 28,
-  },
-  logoSection: {
-    alignItems: 'center',
-    gap: 20,
-  },
-  logoCircle: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#121414',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    width: 96,
-    height: 96,
-  },
-  heading: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  form: {
-    gap: 12,
-  },
-  input: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    color: '#FFFFFF',
-    fontSize: 16,
-    height: 56,
-    paddingHorizontal: 16,
-  },
-  primaryButton: {
-    alignItems: 'center',
-    backgroundColor: '#7C3AED',
-    borderRadius: 999,
-    height: 56,
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-  buttonPressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
-  },
-  primaryButtonInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  footer: {
-    alignItems: 'center',
-    marginTop: 'auto',
-    paddingTop: 8,
-  },
-  footerText: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 14,
-  },
-  footerLink: {
-    color: '#7C3AED',
-    fontWeight: '600',
-  },
-});

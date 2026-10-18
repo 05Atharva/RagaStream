@@ -6,7 +6,7 @@
  * refreshes the React Query caches that display it.
  */
 import { Share } from 'react-native';
-import Toast from 'react-native-toast-message';
+import Toast from './toast';
 import { apiClient } from './apiClient';
 import { queryClient } from './queryClient';
 import { ensureSongInCatalogue } from './songService';

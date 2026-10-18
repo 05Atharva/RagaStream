@@ -63,7 +63,7 @@ const buildLoopAnimation = (restingHeight: number, maxHeight: number) => {
 
 export default function EqualizerBars({
   isPlaying,
-  color = '#7C3AED',
+  color = '#FF7A1A',
   size = 'sm',
 }: EqualizerBarsProps) {
   const { barWidth, gap, maxHeight } = SIZE_CONFIG[size];

@@ -1,25 +1,25 @@
 import React, { useMemo, useState } from 'react';
-import {
-  Alert,
-  Dimensions,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Dimensions, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import Toast from 'react-native-toast-message';
+import Toast from '../services/toast';
 import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
+import { confirmModal } from '../components/AppModal';
 import PlaylistCover from '../components/PlaylistCover';
-import PressableCard from '../components/PressableCard';
 import SkeletonLoader from '../components/SkeletonLoader';
+import Button from '../components/ui/Button';
+import Chip from '../components/ui/Chip';
+import EmptyState from '../components/ui/EmptyState';
+import IconButton from '../components/ui/IconButton';
+import SheetRow from '../components/ui/SheetRow';
+import Tappable from '../components/ui/Tappable';
+import Text from '../components/ui/Text';
+import Rise from '../motion/Rise';
+import { useFirstMount } from '../motion/primitives';
 import { apiClient } from '../services/apiClient';
 import { createPlaylist, invalidatePlaylists } from '../services/libraryActions';
 import { tapHaptic } from '../services/haptics';
@@ -30,7 +30,8 @@ import { useBottomPadding } from '../hooks/useBottomPadding';
 import { useSettingsStore, type LibrarySort } from '../store/settingsStore';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import { Colors, TypeScale } from '../constants/theme';
+import { Layout, Radius, Space, Type } from '../constants/theme';
+import { makeStyles, useColors } from '../theme/ThemeProvider';
 
 type Props = BottomTabScreenProps<BottomTabParamList, 'Library'>;
 type Filter = 'playlists' | 'channels' | null;
@@ -40,17 +41,16 @@ type LibraryItem =
   | { kind: 'playlist'; key: string; name: string; playlist: Playlist; pinned: boolean; recency: number; added: number }
   | { kind: 'channel'; key: string; name: string; thumbnail?: string | null; count: number; recency: number };
 
-const SORT_LABELS: Record<LibrarySort, string> = {
-  recents: 'Recents',
-  added: 'Recently added',
-  alphabetical: 'Alphabetical',
-};
-const GRID_GAP = 12;
-const GRID_COLUMNS = 3;
-const GRID_SIZE = (Dimensions.get('window').width - 32 - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS;
+const SORT_LABELS: Record<LibrarySort, string> = { recents: 'Recents', added: 'Recently added', alphabetical: 'A–Z' };
+const GRID_COLUMNS = 2;
+const GRID_GAP = Space[4];
+const GRID_SIZE = (Dimensions.get('window').width - Layout.gutter * 2 - GRID_GAP) / GRID_COLUMNS;
 
 export default function LibraryScreen({ navigation }: Props) {
-  const rootNavigation = navigation.getParent<NativeStackNavigationProp<RootStackParamList>>();
+  const styles = useStyles();
+  const colors = useColors();
+  const firstMount = useFirstMount();
+  const root = navigation.getParent<NativeStackNavigationProp<RootStackParamList>>();
   const bottomPadding = useBottomPadding();
 
   const [filter, setFilter] = useState<Filter>(null);
@@ -58,6 +58,7 @@ export default function LibraryScreen({ navigation }: Props) {
   const [isSearching, setIsSearching] = useState(false);
   const [isCreateVisible, setIsCreateVisible] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
   const [menuPlaylist, setMenuPlaylist] = useState<Playlist | null>(null);
 
   const librarySort = useSettingsStore((s) => s.librarySort);
@@ -86,7 +87,7 @@ export default function LibraryScreen({ navigation }: Props) {
       added: Date.parse(playlist.created_at ?? '') || 0,
     }));
 
-    // Channels you've liked songs from — Spotify's "Artists" filter, for YouTube.
+    // Channels you've liked songs from — the "Artists" of a YouTube library.
     const channelMap = new Map<string, { count: number; thumbnail?: string | null }>();
     likedSongs.forEach((song) => {
       if (!song.channel_name) return;
@@ -102,35 +103,21 @@ export default function LibraryScreen({ navigation }: Props) {
       recency: playedAt.get(`channel:${name}`) ?? 0,
     }));
 
-    let list: LibraryItem[] =
-      filter === 'playlists' ? playlistItems : filter === 'channels' ? channelItems : [...playlistItems, ...channelItems];
+    let list: LibraryItem[] = filter === 'playlists' ? playlistItems : filter === 'channels' ? channelItems : [...playlistItems, ...channelItems];
     if (q) list = list.filter((item) => item.name.toLowerCase().includes(q));
-
-    const sortValue = (item: LibraryItem) => {
-      if (librarySort === 'alphabetical') return 0;
-      if (item.kind === 'playlist') return librarySort === 'added' ? item.added : item.recency;
-      if (item.kind === 'channel') return librarySort === 'added' ? 0 : item.recency;
-      return 0;
-    };
-    list = [...list].sort((a, b) =>
-      librarySort === 'alphabetical' ? a.name.localeCompare(b.name) : sortValue(b) - sortValue(a)
-    );
-    // Pinned playlists float to the top, in sort order.
-    list = [
-      ...list.filter((i) => i.kind === 'playlist' && i.pinned),
-      ...list.filter((i) => !(i.kind === 'playlist' && i.pinned)),
-    ];
+    const value = (item: LibraryItem) =>
+      item.kind === 'playlist' ? (librarySort === 'added' ? item.added : item.recency) : item.kind === 'channel' && librarySort !== 'added' ? item.recency : 0;
+    list = [...list].sort((a, b) => (librarySort === 'alphabetical' ? a.name.localeCompare(b.name) : value(b) - value(a)));
+    list = [...list.filter((i) => i.kind === 'playlist' && i.pinned), ...list.filter((i) => !(i.kind === 'playlist' && i.pinned))];
 
     const showLiked = filter !== 'channels' && (!q || 'liked songs'.includes(q));
-    return showLiked
-      ? [{ kind: 'liked', key: 'liked', name: 'Liked Songs', count: likedSongs.length }, ...list]
-      : list;
+    return showLiked ? [{ kind: 'liked', key: 'liked', name: 'Liked Songs', count: likedSongs.length }, ...list] : list;
   }, [playlistsQuery.data, likedSongs, recentContexts, pinnedIds, filter, query, librarySort]);
 
   const openItem = (item: LibraryItem) => {
-    if (item.kind === 'liked') rootNavigation?.navigate('LikedSongs');
-    else if (item.kind === 'playlist') rootNavigation?.navigate('Playlist', { playlistId: item.playlist.id });
-    else rootNavigation?.navigate('Channel', { channelName: item.name });
+    if (item.kind === 'liked') root?.navigate('LikedSongs');
+    else if (item.kind === 'playlist') root?.navigate('Playlist', { playlistId: item.playlist.id });
+    else root?.navigate('Channel', { channelName: item.name });
   };
 
   const cycleSort = () => {
@@ -142,170 +129,124 @@ export default function LibraryScreen({ navigation }: Props) {
   const handleCreate = async () => {
     const name = playlistName.trim();
     if (!name) return;
+    setIsCreating(true);
     try {
       const playlist = await createPlaylist(name);
       setPlaylistName('');
       setIsCreateVisible(false);
-      Toast.show({ type: 'success', text1: 'Playlist created' });
-      rootNavigation?.navigate('Playlist', { playlistId: playlist.id });
+      root?.navigate('Playlist', { playlistId: playlist.id });
     } catch {
-      Toast.show({ type: 'error', text1: 'Could not create playlist' });
+      Toast.show({ type: 'error', text1: "Couldn't create the playlist", text2: 'Check your connection and try again.' });
+    } finally {
+      setIsCreating(false);
     }
   };
 
   const handleDelete = (playlist: Playlist) => {
     setMenuPlaylist(null);
-    Alert.alert('Delete playlist', `Delete "${playlist.name}"? This cannot be undone.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await apiClient.delete(`/playlists/${playlist.id}`);
-            invalidatePlaylists();
-            Toast.show({ type: 'success', text1: 'Playlist deleted' });
-          } catch {
-            Toast.show({ type: 'error', text1: 'Could not delete playlist' });
-          }
-        },
+    confirmModal({
+      title: `Delete "${playlist.name}"?`,
+      message: 'This removes the playlist for good. The songs stay in your library.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      icon: 'trash-outline',
+      onConfirm: async () => {
+        try {
+          await apiClient.delete(`/playlists/${playlist.id}`);
+          invalidatePlaylists();
+          Toast.show({ type: 'success', text1: 'Playlist deleted' });
+        } catch {
+          Toast.show({ type: 'error', text1: "Couldn't delete the playlist", text2: 'Try again in a moment.' });
+        }
       },
-    ]);
+    });
   };
 
-  const subtitleFor = (item: LibraryItem) => {
-    if (item.kind === 'liked') return `Playlist · ${item.count} songs`;
-    if (item.kind === 'playlist') return `Playlist · ${item.playlist.song_count ?? 0} songs`;
-    return `Channel · ${item.count} liked`;
-  };
+  const subtitleFor = (item: LibraryItem) =>
+    item.kind === 'liked' ? `${item.count} songs` : item.kind === 'playlist' ? `Playlist · ${item.playlist.song_count ?? 0} songs` : `Channel · ${item.count} liked`;
 
   const coverFor = (item: LibraryItem, size: number) => {
-    if (item.kind === 'liked') return <PlaylistCover variant="liked" size={size} borderRadius={8} />;
-    if (item.kind === 'playlist') return <PlaylistCover thumbnails={item.playlist.cover_thumbnails} size={size} borderRadius={8} />;
-    return (
-      <Image
-        source={{ uri: item.thumbnail ?? undefined }}
-        style={{ width: size, height: size, borderRadius: 999, backgroundColor: Colors.surfaceElevated }}
-        contentFit="cover"
-      />
-    );
+    if (item.kind === 'liked') return <PlaylistCover variant="liked" size={size} borderRadius={Radius.sm} />;
+    if (item.kind === 'playlist') return <PlaylistCover thumbnails={item.playlist.cover_thumbnails} size={size} borderRadius={Radius.sm} />;
+    return <Image source={{ uri: item.thumbnail ?? undefined }} style={{ backgroundColor: colors.surfaceRaised, borderRadius: Radius.pill, height: size, width: size }} contentFit="cover" />;
   };
 
-  const renderListItem = ({ item }: { item: LibraryItem }) => (
-    <PressableCard
-      onPress={() => openItem(item)}
-      onLongPress={item.kind === 'playlist' ? () => setMenuPlaylist(item.playlist) : undefined}
-      style={styles.listRow}
-    >
-      {coverFor(item, 56)}
-      <View style={styles.listMeta}>
-        <Text numberOfLines={1} style={styles.listTitle}>{item.name}</Text>
-        <View style={styles.listSubtitleRow}>
-          {item.kind === 'liked' || (item.kind === 'playlist' && item.pinned) ? (
-            <Ionicons name="pin" size={12} color={Colors.primaryLight} />
-          ) : null}
-          <Text numberOfLines={1} style={styles.listSubtitle}>{subtitleFor(item)}</Text>
-        </View>
-      </View>
-    </PressableCard>
-  );
+  const pinnedMark = (item: LibraryItem) =>
+    item.kind === 'liked' || (item.kind === 'playlist' && item.pinned) ? <Ionicons name="pin" size={12} color={colors.accentInk} /> : null;
 
-  const renderGridItem = ({ item }: { item: LibraryItem }) => (
-    <PressableCard
-      onPress={() => openItem(item)}
-      onLongPress={item.kind === 'playlist' ? () => setMenuPlaylist(item.playlist) : undefined}
-      style={styles.gridItem}
-    >
-      {coverFor(item, GRID_SIZE)}
-      <Text numberOfLines={1} style={styles.gridTitle}>{item.name}</Text>
-      <Text numberOfLines={1} style={styles.gridSubtitle}>{subtitleFor(item)}</Text>
-    </PressableCard>
-  );
-
-  const isLoading = playlistsQuery.isLoading || likedQuery.isLoading;
+  const renderItem = ({ item, index }: { item: LibraryItem; index: number }) =>
+    libraryView === 'grid' ? (
+      <Rise play={firstMount} index={index} style={{ marginBottom: Space[5], width: GRID_SIZE }}>
+        <Tappable onPress={() => openItem(item)} onLongPress={item.kind === 'playlist' ? () => setMenuPlaylist(item.playlist) : undefined}
+          pressScale={0.97} accessibilityRole="button" accessibilityLabel={`${item.name}, ${subtitleFor(item)}`}>
+          {coverFor(item, GRID_SIZE)}
+          <View style={{ gap: 2, marginTop: Space[2] }}>
+            <Text variant="captionStrong" numberOfLines={1}>{item.name}</Text>
+            <View style={styles.subRow}>{pinnedMark(item)}<Text variant="caption" color="textSecondary" numberOfLines={1}>{subtitleFor(item)}</Text></View>
+          </View>
+        </Tappable>
+      </Rise>
+    ) : (
+      <Rise play={firstMount} index={index}>
+        <Tappable style={styles.listRow} pressScale={0.985} onPress={() => openItem(item)}
+          onLongPress={item.kind === 'playlist' ? () => setMenuPlaylist(item.playlist) : undefined}
+          accessibilityRole="button" accessibilityLabel={`${item.name}, ${subtitleFor(item)}`}>
+          {coverFor(item, 60)}
+          <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+            <Text variant="subtitle" numberOfLines={1}>{item.name}</Text>
+            <View style={styles.subRow}>{pinnedMark(item)}<Text variant="caption" color="textSecondary" numberOfLines={1}>{subtitleFor(item)}</Text></View>
+          </View>
+        </Tappable>
+      </Rise>
+    );
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* ── Header ── */}
+    <SafeAreaView edges={['top']} style={styles.root}>
       <View style={styles.header}>
-        <Pressable onPress={() => rootNavigation?.navigate('Settings')} style={styles.avatar} hitSlop={8} accessibilityLabel="Settings">
-          <Ionicons name="person" size={16} color="#FFFFFF" />
-        </Pressable>
-        <Text style={styles.screenTitle}>Your Library</Text>
-        <Pressable onPress={() => setIsSearching((v) => !v)} hitSlop={8} style={styles.headerIcon} accessibilityLabel="Search in Your Library">
-          <Ionicons name="search" size={22} color="#FFFFFF" />
-        </Pressable>
-        <Pressable onPress={() => setIsCreateVisible(true)} hitSlop={8} style={styles.headerIcon} accessibilityLabel="Create playlist">
-          <Ionicons name="add" size={28} color="#FFFFFF" />
-        </Pressable>
+        <Text variant="display" style={{ flex: 1 }}>Library</Text>
+        <IconButton icon="search" onPress={() => setIsSearching((v) => !v)} accessibilityLabel="Search your library" />
+        <IconButton icon="add" variant="tonal" onPress={() => setIsCreateVisible(true)} accessibilityLabel="Create playlist" iconSize={26} />
       </View>
 
       {isSearching ? (
         <View style={styles.searchRow}>
-          <Ionicons name="search" size={16} color={Colors.textMuted} />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search in Your Library"
-            placeholderTextColor={Colors.textMuted}
-            style={styles.searchInput}
-            autoFocus
-          />
-          <Pressable onPress={() => { setQuery(''); setIsSearching(false); }} hitSlop={8}>
-            <Ionicons name="close" size={18} color={Colors.textMuted} />
+          <Ionicons name="search" size={18} color={colors.textTertiary} />
+          <TextInput value={query} onChangeText={setQuery} placeholder="Find in your library" placeholderTextColor={colors.textTertiary}
+            style={styles.searchInput} autoFocus accessibilityLabel="Find in your library" />
+          <Pressable onPress={() => { setQuery(''); setIsSearching(false); }} hitSlop={10} accessibilityLabel="Close search">
+            <Ionicons name="close" size={18} color={colors.textTertiary} />
           </Pressable>
         </View>
       ) : null}
 
-      {/* ── Filter chips ── */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips} style={styles.chipsScroll}>
-        {filter ? (
-          <Pressable onPress={() => setFilter(null)} style={styles.chipClear} accessibilityLabel="Clear filters">
-            <Ionicons name="close" size={16} color="#FFFFFF" />
-          </Pressable>
-        ) : null}
-        {(['playlists', 'channels'] as const)
-          .filter((f) => !filter || filter === f)
-          .map((f) => (
-            <Pressable
-              key={f}
-              onPress={() => {
-                tapHaptic();
-                setFilter(filter === f ? null : f);
-              }}
-              style={[styles.chip, filter === f && styles.chipActive]}
-            >
-              <Text style={styles.chipText}>{f === 'playlists' ? 'Playlists' : 'Channels'}</Text>
-            </Pressable>
-          ))}
-      </ScrollView>
-
-      {/* ── Sort + view toggle ── */}
-      <View style={styles.sortRow}>
-        <Pressable onPress={cycleSort} style={styles.sortButton} hitSlop={6}>
-          <Ionicons name="swap-vertical" size={16} color="#FFFFFF" />
-          <Text style={styles.sortText}>{SORT_LABELS[librarySort]}</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => {
-            tapHaptic();
-            setLibraryView(libraryView === 'list' ? 'grid' : 'list');
-          }}
-          hitSlop={8}
-          accessibilityLabel={libraryView === 'list' ? 'View as grid' : 'View as list'}
-        >
-          <Ionicons name={libraryView === 'list' ? 'grid-outline' : 'list-outline'} size={18} color="#FFFFFF" />
-        </Pressable>
+      <View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+          <Chip label="Playlists" selected={filter === 'playlists'} onPress={() => setFilter(filter === 'playlists' ? null : 'playlists')} />
+          <Chip label="Channels" selected={filter === 'channels'} onPress={() => setFilter(filter === 'channels' ? null : 'channels')} />
+        </ScrollView>
       </View>
 
-      {isLoading ? (
-        <View style={styles.skeletonList}>
-          {Array.from({ length: 4 }).map((_, i) => (
-            <View key={i} style={styles.listRow}>
-              <SkeletonLoader width={56} height={56} borderRadius={8} />
-              <View style={styles.listMeta}>
-                <SkeletonLoader width="60%" height={14} borderRadius={8} />
-                <SkeletonLoader width="35%" height={12} borderRadius={8} style={{ marginTop: 6 }} />
+      <View style={styles.sortRow}>
+        <Pressable onPress={cycleSort} hitSlop={8} style={styles.sortButton} accessibilityRole="button" accessibilityLabel={`Sort by ${SORT_LABELS[librarySort]}`}>
+          <Ionicons name="swap-vertical" size={16} color={colors.text} />
+          <Text variant="captionStrong">{SORT_LABELS[librarySort]}</Text>
+        </Pressable>
+        <IconButton
+          icon={libraryView === 'list' ? 'grid-outline' : 'list-outline'}
+          onPress={() => setLibraryView(libraryView === 'list' ? 'grid' : 'list')}
+          accessibilityLabel={libraryView === 'list' ? 'Show as grid' : 'Show as list'}
+          iconSize={19}
+        />
+      </View>
+
+      {playlistsQuery.isLoading || likedQuery.isLoading ? (
+        <View style={{ gap: Space[3], paddingHorizontal: Layout.gutter }}>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <View key={i} style={{ alignItems: 'center', flexDirection: 'row', gap: Space[3] }}>
+              <SkeletonLoader width={60} height={60} />
+              <View style={{ flex: 1, gap: Space[2] }}>
+                <SkeletonLoader width="60%" height={14} />
+                <SkeletonLoader width="35%" height={11} />
               </View>
             </View>
           ))}
@@ -316,95 +257,63 @@ export default function LibraryScreen({ navigation }: Props) {
           data={items}
           keyExtractor={(item) => item.key}
           numColumns={libraryView === 'grid' ? GRID_COLUMNS : 1}
-          renderItem={libraryView === 'grid' ? renderGridItem : renderListItem}
-          contentContainerStyle={{ paddingBottom: bottomPadding, paddingHorizontal: 16 }}
+          renderItem={renderItem}
+          contentContainerStyle={{ paddingBottom: bottomPadding, paddingHorizontal: Layout.gutter }}
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>
-                {query ? `Couldn't find "${query}"` : filter === 'channels' ? 'No channels yet' : 'Create your first playlist'}
-              </Text>
-              <Text style={styles.emptyBody}>
-                {query
-                  ? 'Try searching again using a different spelling or keyword.'
-                  : filter === 'channels'
-                    ? 'Like songs and their channels will appear here.'
-                    : "It's easy, we'll help you."}
-              </Text>
-              {!query && filter !== 'channels' ? (
-                <Pressable onPress={() => setIsCreateVisible(true)} style={styles.emptyButton}>
-                  <Text style={styles.emptyButtonText}>Create playlist</Text>
-                </Pressable>
-              ) : null}
-            </View>
+            query ? (
+              <EmptyState icon="search" title={`Nothing called "${query}"`} body="Try a different spelling or keyword." compact />
+            ) : filter === 'channels' ? (
+              <EmptyState icon="person-circle-outline" title="No channels yet" body="Like a few songs and the channels behind them will gather here." compact />
+            ) : (
+              <EmptyState icon="albums-outline" title="Make your first playlist" body="Collect the songs you love for a drive, a mood, or a morning." actionLabel="Create playlist" onAction={() => setIsCreateVisible(true)} />
+            )
           }
         />
       )}
 
-      {/* ── Create playlist sheet ── */}
       <AnimatedBottomSheet isVisible={isCreateVisible} onClose={() => setIsCreateVisible(false)}>
-        <View style={styles.sheet}>
-          <Text style={styles.sheetTitle}>Give your playlist a name</Text>
-          <TextInput
-            value={playlistName}
-            onChangeText={setPlaylistName}
-            placeholder="My playlist"
-            placeholderTextColor={Colors.textMuted}
-            style={styles.sheetInput}
-            autoFocus
-            returnKeyType="done"
-            onSubmitEditing={() => void handleCreate()}
-          />
-          <Pressable
-            onPress={() => void handleCreate()}
-            disabled={!playlistName.trim()}
-            style={[styles.createButton, !playlistName.trim() && styles.createButtonDisabled]}
-          >
-            <Text style={styles.createButtonText}>Create</Text>
-          </Pressable>
+        <View style={{ gap: Space[5], paddingBottom: Space[6], paddingHorizontal: Space[6] }}>
+          <Text variant="headline" align="center">Name your playlist</Text>
+          <TextInput value={playlistName} onChangeText={setPlaylistName} placeholder="Sunday drive" placeholderTextColor={colors.textTertiary}
+            style={styles.nameInput} autoFocus returnKeyType="done" onSubmitEditing={() => void handleCreate()} accessibilityLabel="Playlist name" />
+          <Button label="Create" size="lg" onPress={() => void handleCreate()} disabled={!playlistName.trim()} loading={isCreating} fullWidth />
         </View>
       </AnimatedBottomSheet>
 
-      {/* ── Playlist long-press menu ── */}
       <AnimatedBottomSheet isVisible={!!menuPlaylist} onClose={() => setMenuPlaylist(null)}>
         {menuPlaylist ? (
-          <View style={styles.sheet}>
-            <View style={styles.menuHeader}>
-              <PlaylistCover thumbnails={menuPlaylist.cover_thumbnails} size={48} borderRadius={8} />
-              <Text numberOfLines={1} style={styles.menuTitle}>{menuPlaylist.name}</Text>
+          <View style={{ paddingBottom: Space[3], paddingHorizontal: Space[3] }}>
+            <View style={{ alignItems: 'center', flexDirection: 'row', gap: Space[3], paddingBottom: Space[3], paddingHorizontal: Space[2] }}>
+              <PlaylistCover thumbnails={menuPlaylist.cover_thumbnails} size={52} borderRadius={Radius.sm} />
+              <View style={{ flex: 1 }}>
+                <Text variant="subtitle" numberOfLines={1}>{menuPlaylist.name}</Text>
+                <Text variant="caption" color="textSecondary">{menuPlaylist.song_count ?? 0} songs</Text>
+              </View>
             </View>
-            <Pressable
-              style={styles.menuRow}
+            <SheetRow
+              label="Play"
+              icon="play-circle-outline"
               onPress={async () => {
-                const playlist = menuPlaylist;
+                const p = menuPlaylist;
                 setMenuPlaylist(null);
                 try {
-                  const { data } = await apiClient.get<Playlist>(`/playlists/${playlist.id}`);
-                  await playback.playSongs(data.songs ?? [], 0, { type: 'playlist', name: playlist.name, id: playlist.id }, {
-                    thumbnail: playlist.cover_thumbnails?.[0],
-                  });
-                  rootNavigation?.navigate('NowPlaying');
+                  const { data } = await apiClient.get<Playlist>(`/playlists/${p.id}`);
+                  await playback.playSongs(data.songs ?? [], 0, { type: 'playlist', name: p.name, id: p.id }, { thumbnail: p.cover_thumbnails?.[0] });
+                  root?.navigate('NowPlaying');
                 } catch {
-                  Toast.show({ type: 'error', text1: 'Could not play playlist' });
+                  Toast.show({ type: 'error', text1: "Couldn't play this playlist" });
                 }
               }}
-            >
-              <Ionicons name="play-circle-outline" size={22} color="rgba(255,255,255,0.85)" />
-              <Text style={styles.menuLabel}>Play</Text>
-            </Pressable>
-            <Pressable
-              style={styles.menuRow}
+            />
+            <SheetRow
+              label={pinnedIds.includes(menuPlaylist.id) ? 'Unpin' : 'Pin to top'}
+              icon={pinnedIds.includes(menuPlaylist.id) ? 'pin' : 'pin-outline'}
               onPress={() => {
                 togglePinned(menuPlaylist.id);
                 setMenuPlaylist(null);
               }}
-            >
-              <Ionicons name={pinnedIds.includes(menuPlaylist.id) ? 'pin' : 'pin-outline'} size={22} color="rgba(255,255,255,0.85)" />
-              <Text style={styles.menuLabel}>{pinnedIds.includes(menuPlaylist.id) ? 'Unpin playlist' : 'Pin playlist'}</Text>
-            </Pressable>
-            <Pressable style={styles.menuRow} onPress={() => handleDelete(menuPlaylist)}>
-              <Ionicons name="trash-outline" size={22} color={Colors.error} />
-              <Text style={[styles.menuLabel, { color: Colors.error }]}>Delete playlist</Text>
-            </Pressable>
+            />
+            <SheetRow label="Delete playlist" icon="trash-outline" destructive onPress={() => handleDelete(menuPlaylist)} />
           </View>
         ) : null}
       </AnimatedBottomSheet>
@@ -412,227 +321,32 @@ export default function LibraryScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    backgroundColor: Colors.background,
-    flex: 1,
-  },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  avatar: {
-    alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 999,
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
-  },
-  screenTitle: {
-    color: '#FFFFFF',
-    flex: 1,
-    fontSize: TypeScale.heading,
-    fontWeight: '700',
-  },
-  headerIcon: {
-    alignItems: 'center',
-    height: 36,
-    justifyContent: 'center',
-    width: 36,
-  },
+const useStyles = makeStyles((t) => ({
+  root: { backgroundColor: t.colors.bg, flex: 1 },
+  header: { alignItems: 'center', flexDirection: 'row', gap: Space[1], paddingBottom: Space[3], paddingLeft: Layout.gutter, paddingRight: Space[3], paddingTop: Space[3] },
   searchRow: {
     alignItems: 'center',
-    backgroundColor: Colors.surfaceHighlight,
-    borderRadius: 8,
+    backgroundColor: t.colors.surface,
+    borderRadius: Radius.md,
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 8,
-    marginHorizontal: 16,
-    paddingHorizontal: 12,
+    gap: Space[2],
+    height: 46,
+    marginBottom: Space[3],
+    marginHorizontal: Layout.gutter,
+    paddingHorizontal: Space[4],
   },
-  searchInput: {
-    color: Colors.onBackground,
-    flex: 1,
-    fontSize: TypeScale.small,
-    paddingVertical: 8,
-  },
-  chipsScroll: {
-    flexGrow: 0,
-  },
-  chips: {
-    gap: 8,
-    paddingHorizontal: 16,
-  },
-  chip: {
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  chipActive: {
-    backgroundColor: Colors.primary,
-  },
-  chipClear: {
-    alignItems: 'center',
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: 999,
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
-  },
-  chipText: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  sortRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  sortButton: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 6,
-  },
-  sortText: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-  },
-  skeletonList: {
-    paddingHorizontal: 16,
-  },
-  listRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    paddingVertical: 6,
-  },
-  listMeta: {
-    flex: 1,
-    minWidth: 0,
-  },
-  listTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.body,
-  },
-  listSubtitleRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 4,
-    marginTop: 2,
-  },
-  listSubtitle: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-  },
-  gridItem: {
-    marginBottom: 16,
-    width: GRID_SIZE,
-  },
-  gridTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.small,
-    fontWeight: '600',
-    marginTop: 6,
-  },
-  gridSubtitle: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.caption,
-    marginTop: 2,
-  },
-  empty: {
-    alignItems: 'center',
-    paddingTop: 48,
-  },
-  emptyTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.title,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  emptyBody: {
-    color: Colors.textSubdued,
-    fontSize: TypeScale.small,
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  emptyButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 999,
-    marginTop: 20,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-  },
-  emptyButtonText: {
-    color: '#000000',
-    fontSize: TypeScale.body,
-    fontWeight: '700',
-  },
-  sheet: {
-    paddingBottom: 24,
-    paddingHorizontal: 16,
-  },
-  sheetTitle: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.title,
-    fontWeight: '700',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  sheetInput: {
-    borderBottomColor: Colors.primary,
+  searchInput: { ...Type.body, color: t.colors.text, flex: 1, height: '100%' },
+  chips: { gap: Space[2], paddingHorizontal: Layout.gutter },
+  sortRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingLeft: Layout.gutter, paddingRight: Space[3], paddingVertical: Space[2] },
+  sortButton: { alignItems: 'center', flexDirection: 'row', gap: Space[2], minHeight: Layout.touchTarget },
+  listRow: { alignItems: 'center', flexDirection: 'row', gap: Space[4], paddingVertical: Space[2] },
+  subRow: { alignItems: 'center', flexDirection: 'row', gap: Space[1] },
+  nameInput: {
+    ...Type.headline,
+    borderBottomColor: t.colors.accent,
     borderBottomWidth: 2,
-    color: '#FFFFFF',
-    fontSize: TypeScale.heading,
-    fontWeight: '700',
-    marginBottom: 28,
-    paddingVertical: 8,
+    color: t.colors.text,
+    paddingVertical: Space[2],
     textAlign: 'center',
   },
-  createButton: {
-    alignSelf: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 999,
-    paddingHorizontal: 40,
-    paddingVertical: 12,
-  },
-  createButtonDisabled: {
-    opacity: 0.4,
-  },
-  createButtonText: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.body,
-    fontWeight: '700',
-  },
-  menuHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 8,
-  },
-  menuTitle: {
-    color: '#FFFFFF',
-    flex: 1,
-    fontSize: TypeScale.body,
-    fontWeight: '600',
-  },
-  menuRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 16,
-    paddingHorizontal: 4,
-    paddingVertical: 14,
-  },
-  menuLabel: {
-    color: '#FFFFFF',
-    fontSize: TypeScale.body,
-  },
-});
+}));
