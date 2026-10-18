@@ -3,6 +3,8 @@ Search router for songs catalogue queries.
 """
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Query
 
 from db import get_supabase
@@ -19,11 +21,17 @@ async def search_songs(
     """
     Search songs by title or channel_name using ilike matching.
     """
+    # Commas, parentheses and dots are PostgREST filter syntax inside or_();
+    # strip them (and ilike wildcards) so user input can't break the filter.
+    term = re.sub(r"[,()%*.:\\\"]", " ", q).strip()
+    if not term:
+        return SearchResponse(songs=[])
+
     supabase = get_supabase()
     result = (
         supabase.table("songs")
         .select("*")
-        .or_(f"title.ilike.%{q}%,channel_name.ilike.%{q}%")
+        .or_(f"title.ilike.*{term}*,channel_name.ilike.*{term}*")
         .limit(limit)
         .execute()
     )

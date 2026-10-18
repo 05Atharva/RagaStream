@@ -5,8 +5,9 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from auth import get_current_user
 from db import get_supabase
 from schemas import GenreCountResponse, SongCreateRequest, SongResponse
 
@@ -63,7 +64,7 @@ async def get_song(song_id: str):
 
 
 @router.post("", response_model=SongResponse, status_code=201)
-async def create_song(body: SongCreateRequest):
+async def create_song(body: SongCreateRequest, user: dict = Depends(get_current_user)):
     """Save or update YouTube metadata in the songs catalogue."""
     supabase = get_supabase()
     payload = body.model_dump(exclude_none=True)
