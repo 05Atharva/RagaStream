@@ -1,126 +1,230 @@
 ---
 name: RagaStream
+system: Meend
 colors:
-  primary: "#7C3AED"
-  secondary: "#F5A623"
-  tertiary: "#121414"
-  neutral: "#FFFFFF"
-  base: "#000000"
-typography:
-  h1:
-    fontFamily: Inter
-    fontSize: 2rem
-    fontWeight: 700
-  h2:
-    fontFamily: Inter
-    fontSize: 1.5rem
-    fontWeight: 700
-  body-md:
-    fontFamily: Inter
-    fontSize: 1rem
-    fontWeight: 400
-  body-sm:
-    fontFamily: Inter
-    fontSize: 0.875rem
-    fontWeight: 400
-  label-caps:
-    fontFamily: Inter
-    fontSize: 0.75rem
-    fontWeight: 600
-rounded:
-  sm: 8px
-  md: 16px
-  lg: 20px
-  full: 999px
-spacing:
-  xs: 4px
-  sm: 8px
-  md: 16px
-  lg: 24px
-  xl: 32px
-elevation:
-  overlay-blur: 24px
-  card-shadow: "0 4px 16px rgba(0,0,0,0.4)"
+  kesar: "#FF7A1A"      # action
+  neel: "#6E8BFF"       # signal
+  ink: "#0B0F1A"        # dark base
+  porcelain: "#F5F6FA"  # light base
+fonts:
+  display: Bricolage Grotesque (600/700/800)
+  body: Geist (400/500/600/700)
+  mono: Geist Mono (500)
+spacing: 4pt grid · gutter 20
+radius: { xs: 6, sm: 10, md: 14, lg: 20, xl: 28, pill: 999 }
+motion:
+  durations: [90, 140, 200, 280, 360, 900]
+  glide: cubic-bezier(.65, 0, .35, 1)
+  out: cubic-bezier(.16, 1, .3, 1)
+  in: cubic-bezier(.7, 0, .84, 0)
+  standard: cubic-bezier(.2, 0, 0, 1)
+tokens: frontend/constants/theme.ts
 ---
 
-## Overview
+# RagaStream · Meend design system
 
-RagaStream is built for **late-night, headphones-on listening** — the visual language should feel like a premium, ad-free private listening room, not a generic music app template. The mood is **moody, confident, and warm**: an OLED-true-black canvas (#000000) punctuated by Deep Purple (#7C3AED) for action and a Warm Gold (#F5A623) for emotional/personal moments (liked songs, favorites, highlights). Where most music apps go flat-and-cold dark mode, RagaStream should feel a degree warmer and more tactile — closer to a velvet listening lounge than a spreadsheet in dark mode.
+> **Meend** (मींड) is the glide between two notes. A singer doesn't jump from Sa to Pa; they travel. RagaStream is built from that idea: one continuous line, movement that travels on curves, and a single warm colour that tells you where to act.
 
-Default to flat, high-contrast surfaces for dense, text-heavy, or list-based screens (Search results, Playlist tracks, Settings) so legibility never competes with the aesthetic. Depth on playback surfaces comes from **artwork colour**, not blur: the Mini Player, Now Playing and playlist/channel heroes are tinted with a palette derived from the current artwork, so every song and playlist feels distinct while purple stays the action colour.
+This file is the source of truth for how RagaStream looks, reads and moves. Tokens live in `constants/theme.ts`; this document explains them. Change both together. Who we design for, and why, lives in `docs/USER_STORIES.md`.
 
-## Colors
+---
 
-- **Primary — Deep Purple (#7C3AED)**: the app's core action color. Used for primary CTAs (Play buttons, "Create Playlist," "Sign In"), active tab/nav states, the active seek-bar fill, and selection states (selected chips, selected queue item glow).
-- **Secondary — Warm Gold (#F5A623)**: reserved for emotional/personal signals — the filled "Liked" heart, "Featured Today" badges, active shuffle/repeat icon states, and any "your taste" personalization markers. Used sparingly; gold should always read as a highlight, never a base color.
-- **Tertiary — Near-Black Surface (#121414)**: the primary surface color for cards, sheets, input fields, and the bottom tab bar's base layer (before blur is applied). Sits one step lighter than the true-black base so cards have gentle separation without a hard border.
-- **Base — True Black (#000000)**: the root background of every screen. OLED-optimized; the deepest layer behind all content.
-- **Neutral — White (#FFFFFF)**: primary text color on dark surfaces, and the inverted background for high-emphasis light elements (e.g. the "Sign in with Google" button, which intentionally breaks the dark palette per Google's own branding requirements).
-- **Muted text**: not a defined token above, but in implementation use white at reduced opacity (70% for secondary text like channel names/timestamps, 45% for placeholder/disabled text) rather than introducing a new gray token — this keeps the palette minimal and avoids "muddy gray" surfaces fighting the true-black base.
+## 1. Brand
 
-## Typography
+**Personality:** premium, warm, crafted. Confident without shouting. It should feel like a well-made instrument, not a template.
 
-Inter throughout — a clean, geometric sans that stays legible at small sizes (track metadata, durations) while still feeling premium at large display sizes (song titles, greeting headers).
+**The feeling we design for** (from the user stories): *effortless* (music in two taps), *crafted* (building a playlist feels like arranging), *recognised* (the app notices what you love and marks it quietly).
 
-- **h1 (2rem / 700)**: screen-level headers — "Good evening, Anything," Now Playing song title, playlist hero titles.
-- **h2 (1.5rem / 700)**: section headers — "Quick Picks," "Recently Played," "Featured Today."
-- **body-md (1rem / 400)**: primary content text — song titles in list rows, playlist descriptions.
-- **body-sm (0.875rem / 400)**: secondary/metadata text — channel names, durations, timestamps.
-- **label-caps (0.75rem / 600)**: small uppercase-style labels — chip text, button labels, badge text ("YOUTUBE" source badge).
+**What RagaStream is not:** a purple-gradient "AI app", a Spotify clone, a neon arcade. No emoji as icons, no stock gradients, no centre-everything layouts.
 
-In code, `TypeScale` in `constants/theme.ts` adds the in-between steps dense UI needs: **11** (captions, timestamps), **13** (secondary text in list rows — keeps lists tidy), **16**, **18**, **20** (sheet titles, small section headers), **24**, **32**. `Spacing` likewise adds 2/6/12/20/64 to the 4/8/16/24/32 base.
+## 2. Logo
 
-## Geometry & Shape
+**The mark** is one unbroken stroke: an R whose leg bends into a flowing line (the stream), landing on a Neel dot (the note it arrives at).
 
-- **sm (8px)**: small elements — chips, badges, input field corners.
-- **md (16px)**: the default card radius — search result thumbnails, Quick Picks cards, bottom sheet top corners.
-- **lg (20px)**: hero/featured elements — Featured Today banners, Now Playing album art, the Liked Songs hero card.
-- **full (999px)**: fully rounded — primary circular Play/Pause button, avatar images, pill-shaped genre chips and filter buttons.
+```
+path  M14 54 V14 Q14 11 17 11 H33 Q47 11 47 23.5 Q47 36 33 36 H24
+      C31 36 33 44 39 48.5 C44 52 49 49.5 52 45.5      (viewBox 0 0 64 64)
+dot   circle cx 55.5 cy 41.5 r 3.6
+stroke 6.5, round caps and joins · path length ≈ 149
+```
 
-Corners throughout are generous and soft — never sharp 0px corners, even on dense list rows (use at minimum `sm` on thumbnails) — reinforcing the "soft, tactile, premium" feel over a clinical/utilitarian one.
+| Use | Stroke | Dot |
+|---|---|---|
+| On Ink / dark | Kesar `#FF7A1A` | Neel light `#8FA5FF` |
+| On Porcelain / light | Kesar `#E8620A` | Neel deep `#3F5BE0` |
+| On a Kesar fill | Ink `#1A0B00` | Ink |
 
-## Depth & Elevation
+- **Wordmark:** "RagaStream" in Bricolage Grotesque ExtraBold, letter-spacing −2% of size. Lockup gap = 22% of mark size.
+- **Clear space:** half the mark's width on every side. **Minimum size:** 20pt.
+- **App icon:** Kesar mark on Ink, mark at 60% of the canvas (adaptive icon: 46%, inside the safe zone). Rendered from the path above; see `assets/`.
+- **Don't:** recolour the stroke outside the table, add effects, outline it, or separate the dot from the stroke.
+- **In motion:** the stroke draws itself on the glide curve (1100ms), and the dot lands with a squash and settle as the line arrives. Used on the splash, auth screens and milestones only (`components/Logo.tsx`).
 
-Three elevation languages coexist intentionally:
+## 3. Colour
 
-1. **Flat elevation** (list rows, Settings rows, Search results): a barely-there `card-shadow` (`0 4px 16px rgba(0,0,0,0.4)`) on the #121414 surface against the #000000 base — just enough separation to imply a card without distracting from text density.
-2. **Tinted elevation** (Mini Player, Now Playing, playlist / Liked Songs / channel heroes): the backend derives a palette from the artwork (`GET /artwork/color` → `accent`, `background`, `muted`; `useArtworkColor()` in code). Heroes and Now Playing use a vertical gradient from `background` into true black; the Mini Player is a solid `background` tint; collapsed top bars use `muted`. Tints crossfade (300ms) when the track changes. Gradients replace blur here — they read the same, cost far less on Android, and carry the song's own colour.
-3. **Glass elevation** (bottom sheets, modals): reserved for surfaces genuinely layered over other content. The bottom navigation is a transparent-to-black **gradient fade** so content scrolls softly beneath it rather than ending at a hard edge.
+### Brand palette
+| Name | Hex | Role |
+|---|---|---|
+| **Kesar** (saffron) | `#FF7A1A` | The one primary action per screen. Play, Create, Done, the active tab marker. |
+| **Neel** (indigo) | `#6E8BFF` / `#8FA5FF` / `#3F5BE0` | Signals: now-playing accents, Smart Shuffle picks, info, secondary data. |
+| **Ink** | `#0B0F1A` | Dark-theme base. A blue-black, never pure `#000`. |
+| **Porcelain** | `#F5F6FA` | Light-theme base. A cool off-white, never cream. |
 
-## Components
+### Semantic tokens (use these in UI, never raw hex)
+| Token | Dark | Light | Use |
+|---|---|---|---|
+| `bg` | `#0B0F1A` | `#F5F6FA` | Screen background |
+| `surface` | `#121828` | `#FFFFFF` | Cards, sheets, inputs |
+| `surfaceRaised` | `#1A2133` | `#EDEFF5` | Chips at rest, nested surfaces |
+| `surfacePressed` | `#232C42` | `#E2E6EF` | Pressed / toggle-off track |
+| `text` | `#EEF1F8` | `#0B0F1A` | Primary text |
+| `textSecondary` | `#A3ACC2` | `#4A5268` | Metadata, captions |
+| `textTertiary` | `#7A84A0` | `#687089` | Placeholders, quiet icons |
+| `accent` | `#FF7A1A` | `#FF7A1A` | Kesar fills |
+| `onAccent` | `#1A0B00` | `#1A0B00` | Text/icons on Kesar (ink, not white: 7.4:1) |
+| `accentInk` | `#FF8F3D` | `#B54A08` | Kesar as text or icon on the background |
+| `accentSoft` | Kesar 14% | Kesar 12% | Selected and active backgrounds |
+| `signal` | `#8FA5FF` | `#3F5BE0` | Neel accents |
+| `danger` | `#FF5D6C` | `#C62839` | Destructive actions, errors |
+| `success` / `warning` | `#3DD68C` / `#FFC24D` | `#12925A` / `#9A5B00` | Status |
 
-- **Buttons**:
-  - *Primary*: solid #7C3AED fill, white text, `full` or `md` radius depending on context (circular for play controls, pill for "Sign In" / "Create Playlist").
-  - *Secondary*: dark #121414 fill with white text, used for less-emphasized actions sitting next to a primary button (e.g. "Secondary" tab in the palette panel).
-  - *Inverted*: white/light fill with dark text — reserved almost exclusively for the Google OAuth button per Google's branding guidelines, and any other "external system" action that shouldn't visually compete with RagaStream's own purple identity.
-  - *Outlined*: transparent fill, 1px border, used for tertiary/low-emphasis actions.
-- **Chips**: pill-shaped (`full` radius), used for genre shortcuts on Home/Search. Active/selected state fills solid purple; inactive state is a muted dark surface with light text.
-- **Search bar**: `md` radius, #121414 fill, leading search icon at reduced opacity, trailing clear icon appears once text is entered.
-- **Bottom navigation**: gradient-fade bar fixed to the screen bottom, icons-with-labels, active tab icon and label rendered in primary purple, inactive in muted white. The Mini Player floats directly above it.
-- **Mini Player**: artwork-tinted card above the tab bar — thumbnail, title/channel, like, play/pause, next; a 2px white progress line along the bottom edge. Swipe left/right to skip; tap to open Now Playing.
-- **Now Playing**: a scrolling page. Above the fold: artwork (swipe to skip), title + like, seek bar, transport row with shuffle and repeat flanking it (active = gold with a dot), and a utility row (sleep timer, speed, save, share, queue). Below the fold: lyrics card (artwork `accent` fill), Up next, About the channel.
-- **Collapsing header** (playlist, Liked Songs, channel): tinted hero with large title; on scroll the top bar fades to `muted` and shows the title, and the circular purple play button pins beneath it.
-- **Song rows**: 48px thumbnail, title (purple + equalizer when playing), 13px secondary line, ⋮ menu. Long-press opens the song menu; swipe right adds to queue; swipe left removes (where removal applies).
-- **Action icon buttons** (the small circular icon row seen in the component panel — wand/sparkle, share, tag, delete): circular, `full` radius, each carries its own semantic accent color when it represents a destructive or highlighted action (e.g. red-tinted circular background for delete), otherwise neutral dark-surface circular buttons with a white icon.
-- **Badges**: small `sm`-radius label-caps text badges — most notably the red "YouTube" source badge that appears bottom-right on any thumbnail sourced from YouTube, signaling provenance without distracting from the artwork.
+### Rules
+1. **One Kesar per screen.** The primary action gets the fill; everything else is quieter (Figma: hierarchy, contrast).
+2. **Kesar fills carry ink text**, never white. White on saffron fails contrast.
+3. **Neel never competes with Kesar.** It marks state (playing, recommended), not actions.
+4. **Artwork tint:** playback surfaces take a palette from the current artwork (`GET /artwork/color` → `useArtworkColor`, `useHeroTint`). Dark theme uses deep tints fading into Ink; light theme uses pale washes (`mix(accent, bg, .72)`) fading into Porcelain. Tints crossfade over 360ms when the track changes.
+5. **Prahar wash:** Home carries a soft ambient wash coloured by the time of day's raga watch (`theme/prahar.ts`), at 20% (dark) or 28% (light). The brand colours never change with time.
+6. **Both themes, always.** System is the default; Light and Dark are chosen in Settings → Appearance.
 
-## Motion & Interaction
+### Contrast (WCAG 2.1)
+Every text pair above meets AA (4.5:1 body, 3:1 large text and icons) in both themes; verified when the tokens were set. Notable: `textTertiary` on `bg` is 5.1 (dark) and 4.6 (light); `accentInk` on `bg` is 8.4 / 4.9.
 
-Tokens live in `Motion` (`constants/theme.ts`):
+## 4. Typography
 
-- **Durations**: 50 / 100 / 150 / 200 / 250 / 300ms. Nothing user-facing exceeds 300ms.
-- **Easing**: one family — standard `cubic-bezier(.3, 0, 0, 1)`; elements *enter* with decelerate (250–300ms) and *exit* with accelerate (200ms). Prefer timing curves over springs.
-- **No decorative loops.** Infinite animations are reserved for loading (skeletons, spinners) and "now playing" indicators (equalizer bars, long-title marquee). Artwork never spins or pulses.
+Bricolage Grotesque speaks; Geist does the work; Geist Mono keeps time.
 
-Behaviours:
+| Role | Font | Size / line | Tracking | Use |
+|---|---|---|---|---|
+| `hero` | Bricolage 800 | 44 / 46 | −1.4 | Auth titles, Liked Songs, big numbers |
+| `display` | Bricolage 800 | 32 / 36 | −0.9 | Screen titles, greeting, playlist names |
+| `headline` | Bricolage 700 | 24 / 28 | −0.5 | Section headers, Now Playing title |
+| `title` | Bricolage 700 | 19 / 24 | −0.3 | Sheet titles, card titles, lyrics preview |
+| `subtitle` | Geist 600 | 16 / 21 | −0.1 | Button labels, emphasised rows |
+| `body` | Geist 400 | 15 / 22 | 0 | Running text |
+| `bodyStrong` | Geist 500 | 15 / 21 | 0 | Song titles in rows |
+| `caption` | Geist 400 | 13 / 18 | 0 | Metadata (channel, counts) |
+| `captionStrong` | Geist 600 | 13 / 18 | 0 | Chips, small buttons, links |
+| `label` | Geist 600 | 11 / 14 | +0.9, UPPERCASE | Eyebrows ("PLAYING FROM", "RIYAZ MILESTONE") |
+| `mono` | Geist Mono 500 | 12 / 16 | +0.2, tabular | Time, durations, counts, speed |
 
-- Tappable cards and rows scale to 97% on press (`Motion.pressScale`) rather than changing colour.
-- The Liked heart fills from outline to solid gold with a brief scale "pop" on tap.
-- The Mini Player slides up the first time a track loads; its tint crossfades between tracks.
-- Bottom sheets (Queue, Save to, Sleep Timer, Speed) slide up with a drag handle, dismissible by swipe-down.
-- Light haptics on transport controls, chips and tab changes; a firmer tick on committed gestures (swipe-to-skip, swipe-to-queue, drag start); a success pattern on saves.
+- All text goes through `components/ui/Text.tsx` with a role. No ad-hoc `fontSize` in screens.
+- Respect the system font scale (capped at 1.35× so layouts survive).
+- Numbers that change (time, counts) are mono or tabular so they don't jitter.
 
-## Platform Notes
+## 5. Space, shape, elevation
 
-- Designed for native Android conventions: respect system status bar insets, avoid placing primary actions in the bottom gesture-nav exclusion zone, and keep primary tap targets in the lower two-thirds of the screen for thumb reach.
-- Dark theme is the *only* theme — there is no light mode variant; OLED true-black is a deliberate product choice (battery efficiency + late-night listening context), not a default to be inverted later.
+- **4pt grid:** `Space[1]` = 4 … `Space[16]` = 64. **Screen gutter:** 20pt on both sides.
+- **Touch targets:** ≥ 44×44pt (`Layout.touchTarget`). Song rows are 64pt tall with 48pt artwork.
+- **Radius:** `xs 6` (tiny thumbs), `sm 10` (thumbnails, inputs, tiles), `md 14` (cards, mini player), `lg 20` (hero artwork, featured cards, lyrics), `xl 28` (sheets and dialogs), `pill` (buttons, chips, play).
+- **Elevation:** dark theme separates by surface steps; light theme adds `Elevation.card` (soft 4/12 shadow) to cards. `Elevation.art` sits under hero artwork; `Elevation.floating` under the big play button. No blur anywhere: gradients do the work and cost less on Android.
+- **Repeated elements share edges and baselines:** one song row, one sheet row, one section header.
+
+## 6. Motion
+
+Motion is authored by hand on Reanimated primitives (`withTiming`, `withSequence`, `interpolate`) with our own curves. **No canned presets** (`FadeIn*`, `SlideIn*`, Moti, Lottie). If it moves, someone designed how.
+
+### Tokens (`Motion` in theme.ts)
+| Token | Value | For |
+|---|---|---|
+| `instant` | 90ms | Press-in |
+| `quick` | 140ms | Exits, small fades |
+| `base` | 200ms | State changes, toggles, chips |
+| `glide` | 280ms | Entrances, travel |
+| `slow` | 360ms | Hero transitions, tint crossfades |
+| `celebrate` | 900ms | Milestones only |
+| `glide` curve | (.65,0,.35,1) | Movement from A to B |
+| `out` curve | (.16,1,.3,1) | Arrivals |
+| `in` curve | (.7,0,.84,0) | Departures |
+| `standard` | (.2,0,0,1) | Colour and opacity |
+
+### The 12 principles, as RagaStream uses them
+| Principle | Where |
+|---|---|
+| Squash & stretch | Like heart pops tall then settles; logo dot lands; tab indicator stretches in flight |
+| Anticipation | Like and buttons compress on press-in before acting |
+| Staging | Entrances stagger 40ms (max 6 items) so the eye is led, never flooded |
+| Pose to pose | Every animation is start → end (with an overshoot pose where it helps) |
+| Follow-through | Presses release to 1.02 then settle; mini player leans in when it catches a song |
+| Slow in / slow out | No linear motion except loading spinners |
+| Arcs | Glide flights travel a Bézier arc; skipped artwork tilts as it leaves |
+| Secondary action | Glide strokes burst from the heart; Kesar pours into checks and toggles |
+| Timing | Interactions ≤ 300ms; one scale reused everywhere |
+| Exaggeration | Reserved for Riyaz milestone celebrations |
+| Solid drawing | Artwork casts a real shadow; the art breathes back when paused |
+| Appeal | Everything above, applied consistently |
+
+### Vocabulary (reuse these; don't invent one-offs)
+| Name | What it does | Where (file) |
+|---|---|---|
+| **Press** | Compress to 0.96 (rows 0.985), release with a 2% overshoot | `motion/primitives.ts` → `usePressMotion`, `ui/Tappable` |
+| **Rise** | Enter from 14pt below on `out`, staggered; first mount only | `motion/Rise.tsx` |
+| **Glide flight** | Queued song's art flies on an arc into the mini player, which bumps to catch it | `motion/flight.tsx` |
+| **Inchworm** | Selection indicators travel leading edge first, trailing edge catches up | `TabBar.tsx`, `ui/Segmented.tsx` |
+| **Pour** | Selection colour floods in (chips, checks, toggles, focused fields) | `ui/Chip`, `ui/CheckMark`, `ui/Toggle`, `ui/TextField` |
+| **Morph** | Play ⇄ pause reshape as one glyph | `motion/PlayPauseIcon.tsx` |
+| **Breath** | Now Playing art eases to 93% when paused, back on play | `NowPlayingScreen.tsx` |
+| **Draw** | The Meend stroke draws itself | `Logo.tsx` |
+| **Celebrate** | Mark draws, dot lands, glide strokes burst, words rise | `MilestoneHost.tsx` |
+| **Breathing skeleton** | Loading highlight glides across, rests, repeats | `SkeletonLoader.tsx` |
+
+**Loops** are allowed only for loading (skeletons, spinners) and "now playing" signals (equalizer bars, a long title's marquee). Never decoration.
+
+**Reduce motion:** every primitive checks `useReducedMotion()` and swaps movement for a short fade or an instant change.
+
+## 7. Components
+
+| Component | File | Notes |
+|---|---|---|
+| Text | `ui/Text.tsx` | The only text primitive; roles from §4 |
+| Button | `ui/Button.tsx` | `primary` (Kesar, one per screen), `secondary`, `outline`, `ghost`, `danger`; sm 36 / md 44 / lg 52 |
+| IconButton | `ui/IconButton.tsx` | 44pt target, `plain` / `tonal` / `accent` |
+| Chip | `ui/Chip.tsx` | Filters; selected = Kesar fill with ink text |
+| Tappable | `ui/Tappable.tsx` | Cards, tiles, rows |
+| TextField | `ui/TextField.tsx` | Label above, icon inside, Kesar focus border, inline error |
+| Toggle / Segmented / CheckMark | `ui/` | Hand-built controls (no native Switch) |
+| SheetRow / SheetHeader | `ui/SheetRow.tsx` | Every bottom-sheet row |
+| SectionHeader / EmptyState / Screen | `ui/` | Section titles, designed empty states, screen root |
+| Toast | `ui/Toast.tsx` + `services/toast.ts` | Inverse pill above the mini player |
+| AppModal | `AppModal.tsx` | `showModal` / `confirmModal`; replaces native Alert |
+| SongRow | `SongRow.tsx` | The one song row (menu, swipe-to-queue, swipe-to-remove) |
+| MiniPlayer / TabBar | `MiniPlayer.tsx`, `TabBar.tsx` | Artwork-tinted player above a fading tab bar |
+| CollapsingHeader | `CollapsingHeader.tsx` | Hero → top bar, pinned play button |
+| SeekBar | `SeekBar.tsx` | Gesture-built scrubber with time bubble |
+| Sheets | `QueueSheet`, `SaveToSheet`, `SongOptionsSheet`, `SleepTimer`, `SpeedSheet` | On `AnimatedBottomSheet` |
+| PlaylistCover | `PlaylistCover.tsx` | 2×2 mosaic at 4+ songs; Liked = Kesar → Neel tile |
+
+## 8. Screens (one primary job each)
+
+| Screen | Primary action | Signature moment |
+|---|---|---|
+| Splash | — | Stroke draws, wordmark rises, lifts away |
+| Sign in / Sign up | Continue with Google / Sign in | Giant faint Meend draws behind the form |
+| Home | Tap a Jump back in tile | Prahar wash + raga-of-the-hour greeting |
+| Search | Tap a result | Mood tiles with oversized cropped glyphs |
+| Library | Open a playlist | Pins in Kesar; list ⇄ grid |
+| Playlist / Liked / Channel | Big Kesar play | Hero collapses into the bar; play button pins |
+| Now Playing | Play / pause | Breath, morph, swipe-to-skip with tilt |
+| Stats | Switch range | Channel bars fill on arrival |
+| Settings | Toggle a setting | Segmented theme switch with inchworm pill |
+| Milestone | Keep going | The one exaggerated celebration |
+
+## 9. Accessibility
+
+- AA contrast in both themes (§3). Every gesture has a visible button equivalent (swipe-to-skip ↔ skip buttons; swipe-to-queue ↔ menu).
+- Icon-only controls carry `accessibilityLabel`; toggles and chips expose `selected` / `checked` state.
+- System font scale respected (capped 1.35×); reduce-motion respected everywhere.
+- Errors appear next to the field that needs fixing and say how to fix it.
+
+## 10. Voice
+
+Plain, warm, specific. Name things the way listeners do ("Liked Songs", "Up next", "Go to song radio"). Buttons say what happens ("Create", "Save", "Keep going"). Errors explain and offer the fix ("Couldn't start playback. Check your connection and try again."). Never blame the user, never apologise with filler.
