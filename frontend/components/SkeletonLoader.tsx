@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Dimensions, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Dimensions, View, type DimensionValue, type StyleProp, type ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   cancelAnimation,
@@ -15,7 +15,7 @@ const SCREEN_W = Dimensions.get('window').width;
 const GRADIENT_W = SCREEN_W * 3;
 
 type Props = {
-  width: number | string;
+  width: DimensionValue;
   height: number;
   borderRadius?: number;
   style?: StyleProp<ViewStyle>;

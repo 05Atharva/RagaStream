@@ -2,13 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, StyleSheet, Pressable, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
-  Easing,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { Motion } from '../constants/theme';
 
 type Props = {
   isVisible: boolean;
@@ -45,7 +44,7 @@ export default function AnimatedBottomSheet({
       backdropOpacity.value = withTiming(0, { duration: 250 });
       translateY.value = withTiming(
         sheetHeight.value,
-        { duration: 250, easing: Easing.in(Easing.ease) },
+        { duration: Motion.duration.base, easing: Motion.easing.accelerate },
         (finished) => {
           if (!finished) return;
           runOnJS(setIsMounted)(false);
@@ -73,7 +72,7 @@ export default function AnimatedBottomSheet({
     translateY.value = screenHeight;
     backdropOpacity.value = 0;
     backdropOpacity.value = withTiming(0.6, { duration: 300 });
-    translateY.value = withSpring(0, { damping: 25, stiffness: 200 });
+    translateY.value = withTiming(0, { duration: Motion.duration.slow, easing: Motion.easing.decelerate });
   }, [isMounted, backdropOpacity, screenHeight, translateY]);
 
   // Fixed reference for drag feedback/close-threshold — using the sheet's own
@@ -98,7 +97,7 @@ export default function AnimatedBottomSheet({
         backdropOpacity.value = withTiming(0, { duration: 250 });
         translateY.value = withTiming(
           sheetHeight.value,
-          { duration: 250, easing: Easing.in(Easing.ease) },
+          { duration: Motion.duration.base, easing: Motion.easing.accelerate },
           (finished) => {
             if (!finished) return;
             runOnJS(setIsMounted)(false);
@@ -106,7 +105,7 @@ export default function AnimatedBottomSheet({
           }
         );
       } else {
-        translateY.value = withSpring(0, { damping: 25, stiffness: 200 });
+        translateY.value = withTiming(0, { duration: Motion.duration.slow, easing: Motion.easing.decelerate });
         backdropOpacity.value = withTiming(0.6, { duration: 200 });
       }
     });
