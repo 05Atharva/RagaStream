@@ -1,18 +1,19 @@
 import React, { useEffect } from 'react';
-import { Dimensions, View, type DimensionValue, type StyleProp, type ViewStyle } from 'react-native';
+import { View, type DimensionValue, type StyleProp, type ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   cancelAnimation,
-  Easing,
   interpolate,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
+  withDelay,
   withRepeat,
+  withSequence,
   withTiming,
 } from 'react-native-reanimated';
-
-const SCREEN_W = Dimensions.get('window').width;
-const GRADIENT_W = SCREEN_W * 3;
+import { Motion, Radius } from '../constants/theme';
+import { useColors } from '../theme/ThemeProvider';
 
 type Props = {
   width: DimensionValue;
@@ -21,47 +22,45 @@ type Props = {
   style?: StyleProp<ViewStyle>;
 };
 
-export default function SkeletonLoader({ width, height, borderRadius = 8, style }: Props) {
+const SWEEP_WIDTH = 220;
+
+/**
+ * Loading placeholder. The highlight glides across on the Meend curve and
+ * rests between passes, like a breath, rather than looping mechanically.
+ */
+export default function SkeletonLoader({ width, height, borderRadius = Radius.sm, style }: Props) {
+  const colors = useColors();
+  const reduced = useReducedMotion();
   const progress = useSharedValue(0);
 
   useEffect(() => {
+    if (reduced) return;
     progress.value = withRepeat(
-      withTiming(1, { duration: 1200, easing: Easing.linear }),
-      -1,
+      withSequence(
+        withTiming(1, { duration: 1100, easing: Motion.easing.glide }),
+        withDelay(350, withTiming(0, { duration: 0 }))
+      ),
+      -1
     );
-    return () => {
-      cancelAnimation(progress);
-    };
-  }, [progress]);
+    return () => cancelAnimation(progress);
+  }, [progress, reduced]);
 
-  const shimmerStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: interpolate(progress.value, [0, 1], [0, SCREEN_W * 2.5]) },
-    ],
+  const sweepStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(progress.value, [0, 1], [-SWEEP_WIDTH, 420]) }],
   }));
 
   return (
-    <View
-      style={[
-        { width, height, borderRadius, backgroundColor: '#1A1A1A', overflow: 'hidden' },
-        style,
-      ]}
-    >
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          { position: 'absolute', top: 0, left: -SCREEN_W * 2, width: GRADIENT_W, height },
-          shimmerStyle,
-        ]}
-      >
-        <LinearGradient
-          colors={['#1A1A1A', '#1A1A1A', '#252525', '#2A2A2A', '#252525', '#1A1A1A', '#1A1A1A']}
-          locations={[0, 0.3, 0.45, 0.5, 0.55, 0.7, 1]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={{ width: GRADIENT_W, height }}
-        />
-      </Animated.View>
+    <View style={[{ width, height, borderRadius, backgroundColor: colors.skeleton, overflow: 'hidden' }, style]}>
+      {!reduced ? (
+        <Animated.View pointerEvents="none" style={[{ position: 'absolute', top: 0, bottom: 0, width: SWEEP_WIDTH }, sweepStyle]}>
+          <LinearGradient
+            colors={[colors.skeleton, colors.skeletonHighlight, colors.skeleton]}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={{ flex: 1 }}
+          />
+        </Animated.View>
+      ) : null}
     </View>
   );
 }

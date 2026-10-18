@@ -1,238 +1,154 @@
 /**
- * AppModal — A reusable, globally-accessible modal component.
+ * AppModal — the app's dialog. Replaces native Alert so confirmations match
+ * the brand in both themes.
  *
- * Usage:
- *   import { showModal } from '../components/AppModal';
- *   showModal({ title: 'Oops', message: 'Song already in playlist.', icon: 'alert-circle' });
- *
- * Supports:
- *   - Single action (OK) or dual actions (Cancel / Confirm)
- *   - Custom icons via Ionicons
- *   - Smooth fade + scale animation
+ *   showModal({ title: 'Delete playlist?', message: '…', tone: 'danger',
+ *     actions: [{ label: 'Cancel', style: 'cancel' }, { label: 'Delete', style: 'destructive', onPress }] })
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Animated,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Modal, Pressable, View } from 'react-native';
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
+import { create } from 'zustand';
+import { Motion, Radius, Space } from '../constants/theme';
+import { makeStyles, useColors } from '../theme/ThemeProvider';
+import Button from './ui/Button';
+import Text from './ui/Text';
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
-type ModalAction = {
+export type ModalAction = {
   label: string;
   onPress?: () => void;
   style?: 'default' | 'destructive' | 'cancel';
 };
 
-type ModalConfig = {
+export type ModalConfig = {
   title: string;
   message: string;
-  icon?: keyof typeof Ionicons.glyphMap;
-  iconColor?: string;
+  icon?: React.ComponentProps<typeof Ionicons>['name'];
+  tone?: 'default' | 'danger';
   actions?: ModalAction[];
 };
 
-// ── Global show/hide ─────────────────────────────────────────────────────────
-
-let _showModalFn: ((config: ModalConfig) => void) | null = null;
+const useModalStore = create<{ config: ModalConfig | null }>(() => ({ config: null }));
 
 export function showModal(config: ModalConfig) {
-  if (_showModalFn) {
-    _showModalFn(config);
-  } else {
-    console.warn('[AppModal] Not mounted yet — call showModal after <AppModal /> is rendered.');
-  }
+  useModalStore.setState({ config });
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
+/** Two-button confirmation with the destructive action on the right. */
+export function confirmModal(opts: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  destructive?: boolean;
+  icon?: ModalConfig['icon'];
+}) {
+  showModal({
+    title: opts.title,
+    message: opts.message,
+    icon: opts.icon,
+    tone: opts.destructive ? 'danger' : 'default',
+    actions: [
+      { label: 'Cancel', style: 'cancel' },
+      { label: opts.confirmLabel, style: opts.destructive ? 'destructive' : 'default', onPress: opts.onConfirm },
+    ],
+  });
+}
 
 export default function AppModal() {
-  const [visible, setVisible] = useState(false);
-  const [config, setConfig] = useState<ModalConfig | null>(null);
-  const opacity = useRef(new Animated.Value(0)).current;
-  const scale = useRef(new Animated.Value(0.85)).current;
-
-  const show = useCallback((cfg: ModalConfig) => {
-    setConfig(cfg);
-    setVisible(true);
-  }, []);
-
-  const hide = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(opacity, { toValue: 0, duration: 150, useNativeDriver: true }),
-      Animated.timing(scale, { toValue: 0.85, duration: 150, useNativeDriver: true }),
-    ]).start(() => {
-      setVisible(false);
-      setConfig(null);
-    });
-  }, [opacity, scale]);
+  const styles = useStyles();
+  const colors = useColors();
+  const reduced = useReducedMotion();
+  const config = useModalStore((s) => s.config);
+  const [shown, setShown] = useState<ModalConfig | null>(null);
+  const progress = useSharedValue(0);
 
   useEffect(() => {
-    _showModalFn = show;
-    return () => {
-      _showModalFn = null;
-    };
-  }, [show]);
-
-  useEffect(() => {
-    if (visible) {
-      opacity.setValue(0);
-      scale.setValue(0.85);
-      Animated.parallel([
-        Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
-        Animated.spring(scale, { toValue: 1, friction: 8, tension: 65, useNativeDriver: true }),
-      ]).start();
+    if (config) {
+      setShown(config);
+      progress.value = 0;
+      progress.value = withTiming(1, { duration: Motion.duration.glide, easing: Motion.easing.out });
     }
-  }, [visible, opacity, scale]);
+  }, [config, progress]);
 
-  if (!visible || !config) return null;
+  const close = (after?: () => void) => {
+    progress.value = withTiming(0, { duration: Motion.duration.quick, easing: Motion.easing.in }, (done) => {
+      if (done) {
+        runOnJS(setShown)(null);
+        if (after) runOnJS(after)();
+      }
+    });
+    useModalStore.setState({ config: null });
+  };
 
-  const actions = config.actions ?? [{ label: 'OK', style: 'default' as const }];
+  const scrimStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
+  const cardStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: reduced
+      ? []
+      : [{ translateY: (1 - progress.value) * 16 }, { scale: 0.96 + progress.value * 0.04 }],
+  }));
+
+  if (!shown) return null;
+  const actions = shown.actions ?? [{ label: 'OK', style: 'default' as const }];
+  const accent = shown.tone === 'danger' ? colors.danger : colors.accentInk;
 
   return (
-    <Modal transparent visible={visible} animationType="none" statusBarTranslucent>
-      <Pressable style={styles.overlay} onPress={hide}>
-        <Animated.View style={[styles.card, { opacity, transform: [{ scale }] }]}>
-          <Pressable>
-            {/* Icon */}
-            {config.icon && (
-              <View style={styles.iconWrap}>
-                <Ionicons
-                  name={config.icon}
-                  size={36}
-                  color={config.iconColor ?? '#7C3AED'}
-                />
-              </View>
-            )}
-
-            {/* Title */}
-            <Text style={styles.title}>{config.title}</Text>
-
-            {/* Message */}
-            <Text style={styles.message}>{config.message}</Text>
-
-            {/* Actions */}
-            <View style={styles.actions}>
-              {actions.map((action, i) => {
-                const isDestructive = action.style === 'destructive';
-                const isCancel = action.style === 'cancel';
-                return (
-                  <Pressable
-                    key={i}
-                    onPress={() => {
-                      hide();
-                      action.onPress?.();
-                    }}
-                    style={({ pressed }) => [
-                      styles.actionBtn,
-                      isCancel && styles.actionBtnCancel,
-                      !isCancel && styles.actionBtnPrimary,
-                      isDestructive && styles.actionBtnDestructive,
-                      pressed && styles.actionBtnPressed,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.actionBtnText,
-                        isCancel && styles.actionBtnTextCancel,
-                      ]}
-                    >
-                      {action.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </Pressable>
+    <Modal transparent visible animationType="none" statusBarTranslucent onRequestClose={() => close()}>
+      <View style={styles.root}>
+        <Animated.View style={[styles.scrim, scrimStyle]}>
+          <Pressable style={{ flex: 1 }} onPress={() => close()} accessibilityLabel="Dismiss" />
         </Animated.View>
-      </Pressable>
+        <Animated.View style={[styles.card, cardStyle]} accessibilityViewIsModal>
+          {shown.icon ? (
+            <View style={[styles.iconWrap, { backgroundColor: shown.tone === 'danger' ? colors.dangerSoft : colors.accentSoft }]}>
+              <Ionicons name={shown.icon} size={26} color={accent} />
+            </View>
+          ) : null}
+          <Text variant="title" accessibilityRole="header">{shown.title}</Text>
+          <Text variant="body" color="textSecondary">{shown.message}</Text>
+          <View style={styles.actions}>
+            {actions.map((action) => (
+              <Button
+                key={action.label}
+                label={action.label}
+                size="md"
+                variant={action.style === 'cancel' ? 'secondary' : action.style === 'destructive' ? 'danger' : 'primary'}
+                onPress={() => close(action.onPress)}
+                style={styles.action}
+              />
+            ))}
+          </View>
+        </Animated.View>
+      </View>
     </Modal>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
-
-const styles = StyleSheet.create({
-  overlay: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
+const useStyles = makeStyles((t) => ({
+  root: { flex: 1, justifyContent: 'center', padding: Space[6] },
+  scrim: { ...{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }, backgroundColor: t.colors.scrim },
   card: {
-    backgroundColor: '#1a1c1c',
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 20,
-    borderWidth: 1,
-    maxWidth: 360,
-    paddingBottom: 20,
-    paddingHorizontal: 24,
-    paddingTop: 28,
-    width: '100%',
+    backgroundColor: t.colors.surface,
+    borderRadius: Radius.xl,
+    gap: Space[3],
+    padding: Space[6],
   },
   iconWrap: {
     alignItems: 'center',
-    alignSelf: 'center',
-    backgroundColor: 'rgba(124, 58, 237, 0.12)',
-    borderRadius: 999,
-    height: 64,
+    borderRadius: Radius.pill,
+    height: 52,
     justifyContent: 'center',
-    marginBottom: 16,
-    width: 64,
+    marginBottom: Space[1],
+    width: 52,
   },
-  title: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  message: {
-    color: 'rgba(204, 195, 216, 0.85)',
-    fontSize: 15,
-    fontWeight: '400',
-    lineHeight: 22,
-    marginBottom: 24,
-    textAlign: 'center',
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  actionBtn: {
-    alignItems: 'center',
-    borderRadius: 12,
-    flex: 1,
-    justifyContent: 'center',
-    paddingVertical: 14,
-  },
-  actionBtnPrimary: {
-    backgroundColor: '#7C3AED',
-  },
-  actionBtnCancel: {
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderWidth: 1,
-  },
-  actionBtnDestructive: {
-    backgroundColor: '#C62828',
-  },
-  actionBtnPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.97 }],
-  },
-  actionBtnText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  actionBtnTextCancel: {
-    color: 'rgba(255, 255, 255, 0.7)',
-  },
-});
+  actions: { flexDirection: 'row', gap: Space[3], marginTop: Space[3] },
+  action: { flex: 1 },
+}));

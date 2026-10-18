@@ -7,7 +7,9 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import { Motion } from '../constants/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Motion, Radius } from '../constants/theme';
+import { useColors } from '../theme/ThemeProvider';
 
 type Props = {
   isVisible: boolean;
@@ -20,9 +22,11 @@ export default function AnimatedBottomSheet({
   isVisible,
   onClose,
   children,
-  backgroundColor = '#1a1c1c',
+  backgroundColor,
 }: Props) {
   const { height: screenHeight } = useWindowDimensions();
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
   const [isMounted, setIsMounted] = useState(false);
 
   // Shared value so worklets can read/write without crossing threads
@@ -44,7 +48,7 @@ export default function AnimatedBottomSheet({
       backdropOpacity.value = withTiming(0, { duration: 250 });
       translateY.value = withTiming(
         sheetHeight.value,
-        { duration: Motion.duration.base, easing: Motion.easing.accelerate },
+        { duration: Motion.duration.base, easing: Motion.easing.in },
         (finished) => {
           if (!finished) return;
           runOnJS(setIsMounted)(false);
@@ -72,7 +76,7 @@ export default function AnimatedBottomSheet({
     translateY.value = screenHeight;
     backdropOpacity.value = 0;
     backdropOpacity.value = withTiming(0.6, { duration: 300 });
-    translateY.value = withTiming(0, { duration: Motion.duration.slow, easing: Motion.easing.decelerate });
+    translateY.value = withTiming(0, { duration: Motion.duration.slow, easing: Motion.easing.out });
   }, [isMounted, backdropOpacity, screenHeight, translateY]);
 
   // Fixed reference for drag feedback/close-threshold — using the sheet's own
@@ -97,7 +101,7 @@ export default function AnimatedBottomSheet({
         backdropOpacity.value = withTiming(0, { duration: 250 });
         translateY.value = withTiming(
           sheetHeight.value,
-          { duration: Motion.duration.base, easing: Motion.easing.accelerate },
+          { duration: Motion.duration.base, easing: Motion.easing.in },
           (finished) => {
             if (!finished) return;
             runOnJS(setIsMounted)(false);
@@ -105,13 +109,14 @@ export default function AnimatedBottomSheet({
           }
         );
       } else {
-        translateY.value = withTiming(0, { duration: Motion.duration.slow, easing: Motion.easing.decelerate });
+        translateY.value = withTiming(0, { duration: Motion.duration.slow, easing: Motion.easing.out });
         backdropOpacity.value = withTiming(0.6, { duration: 200 });
       }
     });
 
+  // backdropOpacity runs 0 → 0.6; the themed scrim already carries its alpha.
   const backdropStyle = useAnimatedStyle(() => ({
-    opacity: backdropOpacity.value,
+    opacity: backdropOpacity.value / 0.6,
   }));
 
   const sheetStyle = useAnimatedStyle(() => ({
@@ -133,19 +138,19 @@ export default function AnimatedBottomSheet({
         <Pressable style={StyleSheet.absoluteFillObject} onPress={() => animateClose(true)}>
           <Animated.View
             pointerEvents="none"
-            style={[StyleSheet.absoluteFillObject, styles.backdrop, backdropStyle]}
+            style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.scrim }, backdropStyle]}
           />
         </Pressable>
 
         {/* Sheet panel */}
         <Animated.View
-          style={[styles.sheet, { backgroundColor, maxHeight: screenHeight * 0.85 }, sheetStyle]}
+          style={[styles.sheet, { backgroundColor: backgroundColor ?? colors.surface, maxHeight: screenHeight * 0.88, paddingBottom: insets.bottom }, sheetStyle]}
           onLayout={(e) => { sheetHeight.value = e.nativeEvent.layout.height; }}
         >
           {/* Draggable handle — gesture only here, not on content */}
           <GestureDetector gesture={panGesture}>
             <View style={styles.handleArea}>
-              <View style={styles.handle} />
+              <View style={[styles.handle, { backgroundColor: colors.textTertiary }]} />
             </View>
           </GestureDetector>
           {children}
@@ -160,12 +165,9 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
   },
-  backdrop: {
-    backgroundColor: '#000000',
-  },
   sheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
     overflow: 'hidden',
   },
   handleArea: {
@@ -174,9 +176,9 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
   handle: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: 999,
     height: 4,
-    width: 40,
+    opacity: 0.5,
+    width: 36,
   },
 });

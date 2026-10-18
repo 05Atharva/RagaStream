@@ -1,152 +1,142 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
-  Easing,
   interpolateColor,
-  runOnJS,
   useAnimatedProps,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withSequence,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { Brand, Motion } from '../constants/theme';
+import { useColors, useTheme } from '../theme/ThemeProvider';
 
 type LikeButtonProps = {
   isLiked: boolean;
   onToggle: () => void;
   size?: number;
+  /** Outline colour when not liked (e.g. white on artwork-tinted surfaces). */
+  idleColor?: string;
 };
 
-type ParticleProps = {
-  angle: number;
-  burstId: number;
-  color: string;
-  distance: number;
-};
-
-const GOLD = '#F5A623';
-const GRAY = 'rgba(255,255,255,0.7)';
-const PURPLE = '#7C3AED';
-const PARTICLE_SIZE = 4;
-const PARTICLE_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
-const LIKE_POP = { damping: 10, stiffness: 300 };
-const UNLIKE_POP = { damping: 10, stiffness: 300 };
+const STROKES = [0, 60, 120, 180, 240, 300];
 const AnimatedIonicons = Animated.createAnimatedComponent(
   Ionicons as React.ComponentType<React.ComponentProps<typeof Ionicons>>
 );
 
-function Particle({ angle, burstId, color, distance }: ParticleProps) {
-  const x = useSharedValue(0);
-  const y = useSharedValue(0);
-  const opacity = useSharedValue(0);
+/**
+ * A short glide stroke that leaves the heart on a curve: it travels outward
+ * while rotating 24°, so its path bends like a meend rather than a straight
+ * spark. Kesar and Neel alternate.
+ */
+function GlideStroke({ angle, burst, color, distance }: { angle: number; burst: number; color: string; distance: number }) {
+  const t = useSharedValue(0);
 
   useEffect(() => {
-    if (burstId === 0) {
-      return;
-    }
+    if (burst === 0) return;
+    t.value = 0;
+    t.value = withTiming(1, { duration: 520, easing: Motion.easing.out });
+  }, [burst, t]);
 
-    const radians = (angle * Math.PI) / 180;
-    x.value = 0;
-    y.value = 0;
-    opacity.value = 1;
-    x.value = withTiming(Math.cos(radians) * distance, {
-      duration: 500,
-      easing: Easing.out(Easing.cubic),
-    });
-    y.value = withTiming(Math.sin(radians) * distance, {
-      duration: 500,
-      easing: Easing.out(Easing.cubic),
-    });
-    opacity.value = withTiming(0, { duration: 500 });
-  }, [angle, burstId, distance, opacity, x, y]);
+  const style = useAnimatedStyle(() => {
+    const p = t.value;
+    const bend = (angle + p * 24) * (Math.PI / 180);
+    const r = 6 + p * distance;
+    return {
+      opacity: p === 0 ? 0 : 1 - p,
+      transform: [
+        { translateX: Math.cos(bend) * r },
+        { translateY: Math.sin(bend) * r },
+        { rotate: `${angle + 90 + p * 24}deg` },
+        { scaleY: 1 - p * 0.6 },
+      ],
+    };
+  });
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-    transform: [{ translateX: x.value }, { translateY: y.value }],
-  }));
-
-  return <Animated.View style={[styles.particle, { backgroundColor: color }, animatedStyle]} />;
+  return <Animated.View style={[styles.stroke, { backgroundColor: color }, style]} />;
 }
 
-export default function LikeButton({ isLiked, onToggle, size = 24 }: LikeButtonProps) {
-  const [burstId, setBurstId] = useState(0);
-  const previousLikedRef = useRef(isLiked);
-  const scale = useSharedValue(1);
-  const colorProgress = useSharedValue(isLiked ? 1 : 0);
-  const burstTrigger = useSharedValue(0);
-  const touchSize = Math.max(size + 16, 40);
-  const particleDistance = Math.max(size * 0.9, 22);
-
-  const startBurst = useCallback(() => {
-    setBurstId((value) => value + 1);
-  }, []);
+/**
+ * Like: anticipation (squash on press) → pop (heart fills Kesar and stretches
+ * up) → follow-through (settles) with a burst of glide strokes. Unliking is
+ * deliberately quieter: a small dip, no burst.
+ */
+export default function LikeButton({ isLiked, onToggle, size = 24, idleColor }: LikeButtonProps) {
+  const colors = useColors();
+  const { isDark } = useTheme();
+  const reduced = useReducedMotion();
+  const [burst, setBurst] = useState(0);
+  const previous = useRef(isLiked);
+  const scaleX = useSharedValue(1);
+  const scaleY = useSharedValue(1);
+  const fill = useSharedValue(isLiked ? 1 : 0);
+  const idle = idleColor ?? colors.textSecondary;
+  const liked = isDark ? Brand.kesar : '#E8620A';
+  const touch = Math.max(size + 20, 44);
 
   useEffect(() => {
-    const wasLiked = previousLikedRef.current;
-    previousLikedRef.current = isLiked;
-
-    if (wasLiked === isLiked) {
-      colorProgress.value = isLiked ? 1 : 0;
+    const was = previous.current;
+    previous.current = isLiked;
+    if (was === isLiked) {
+      fill.value = isLiked ? 1 : 0;
       return;
     }
-
+    fill.value = withTiming(isLiked ? 1 : 0, { duration: Motion.duration.base, easing: Motion.easing.standard });
+    if (reduced) return;
     if (isLiked) {
-      scale.value = withSequence(
-        withSpring(1.3, LIKE_POP),
-        withSpring(1, LIKE_POP)
+      scaleX.value = withSequence(
+        withTiming(1.18, { duration: 140, easing: Motion.easing.out }),
+        withTiming(0.96, { duration: 120, easing: Motion.easing.standard }),
+        withTiming(1, { duration: 140, easing: Motion.easing.standard })
       );
-      colorProgress.value = withTiming(1, { duration: 500 });
-      burstTrigger.value = withTiming(burstTrigger.value + 1, { duration: 0 }, (finished) => {
-        if (finished) {
-          runOnJS(startBurst)();
-        }
-      });
-      return;
+      scaleY.value = withSequence(
+        withTiming(1.3, { duration: 140, easing: Motion.easing.out }),
+        withTiming(0.92, { duration: 120, easing: Motion.easing.standard }),
+        withTiming(1, { duration: 140, easing: Motion.easing.standard })
+      );
+      setBurst((b) => b + 1);
+    } else {
+      scaleX.value = withSequence(withTiming(0.88, { duration: 110 }), withTiming(1, { duration: 160, easing: Motion.easing.out }));
+      scaleY.value = withSequence(withTiming(0.88, { duration: 110 }), withTiming(1, { duration: 160, easing: Motion.easing.out }));
     }
+  }, [fill, isLiked, reduced, scaleX, scaleY]);
 
-    scale.value = withSequence(
-      withSpring(1.15, UNLIKE_POP),
-      withSpring(1, UNLIKE_POP)
-    );
-    colorProgress.value = withTiming(0, { duration: 220 });
-  }, [burstTrigger, colorProgress, isLiked, scale, startBurst]);
-
-  const iconStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const animatedIconProps = useAnimatedProps(() => ({
-    color: interpolateColor(colorProgress.value, [0, 1], [GRAY, GOLD]),
-  }));
+  const iconStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: scaleX.value }, { scaleY: scaleY.value }] }));
+  const iconProps = useAnimatedProps(() => ({ color: interpolateColor(fill.value, [0, 1], [idle, liked]) }));
 
   return (
     <Pressable
-      hitSlop={8}
       onPress={onToggle}
-      style={({ pressed }) => [
-        styles.button,
-        { height: touchSize, width: touchSize },
-        pressed && styles.buttonPressed,
-      ]}
+      onPressIn={() => {
+        if (reduced) return;
+        scaleX.value = withTiming(0.86, { duration: Motion.duration.instant, easing: Motion.easing.out });
+        scaleY.value = withTiming(0.86, { duration: Motion.duration.instant, easing: Motion.easing.out });
+      }}
+      onPressOut={() => {
+        if (reduced) return;
+        if (scaleX.value < 1) {
+          scaleX.value = withTiming(1, { duration: Motion.duration.quick, easing: Motion.easing.out });
+          scaleY.value = withTiming(1, { duration: Motion.duration.quick, easing: Motion.easing.out });
+        }
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={isLiked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+      accessibilityState={{ selected: isLiked }}
+      style={[styles.button, { width: touch, height: touch }]}
     >
       <Animated.View style={iconStyle}>
-        <AnimatedIonicons
-          animatedProps={animatedIconProps}
-          name={isLiked ? 'heart' : 'heart-outline'}
-          size={size}
-        />
+        <AnimatedIonicons animatedProps={iconProps} name={isLiked ? 'heart' : 'heart-outline'} size={size} />
       </Animated.View>
-
-      <View pointerEvents="none" style={styles.particles}>
-        {PARTICLE_ANGLES.map((angle, index) => (
-          <Particle
+      <View pointerEvents="none" style={styles.burst}>
+        {STROKES.map((angle, i) => (
+          <GlideStroke
             key={angle}
             angle={angle}
-            burstId={burstId}
-            color={index % 2 === 0 ? PURPLE : GOLD}
-            distance={particleDistance}
+            burst={burst}
+            color={i % 2 === 0 ? liked : isDark ? Brand.neelLight : Brand.neelDeep}
+            distance={size * 0.95}
           />
         ))}
       </View>
@@ -155,27 +145,7 @@ export default function LikeButton({ isLiked, onToggle, size = 24 }: LikeButtonP
 }
 
 const styles = StyleSheet.create({
-  button: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'visible',
-    position: 'relative',
-  },
-  buttonPressed: {
-    opacity: 0.85,
-  },
-  particles: {
-    ...StyleSheet.absoluteFillObject,
-    overflow: 'visible',
-  },
-  particle: {
-    borderRadius: PARTICLE_SIZE / 2,
-    height: PARTICLE_SIZE,
-    left: '50%',
-    marginLeft: -PARTICLE_SIZE / 2,
-    marginTop: -PARTICLE_SIZE / 2,
-    position: 'absolute',
-    top: '50%',
-    width: PARTICLE_SIZE,
-  },
+  button: { alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+  burst: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+  stroke: { borderRadius: 2, height: 7, position: 'absolute', width: 2.5 },
 });
