@@ -58,6 +58,6 @@ async def list_liked_songs(user: dict = Depends(get_current_user)):
     for row in result.data or []:
         song = row.get("songs")
         if song:
-            songs.append(song)
+            songs.append({**song, "added_at": row.get("liked_at")})
 
     return songs
