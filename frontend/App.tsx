@@ -1,22 +1,31 @@
-import React, { useEffect } from 'react';
-import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { queryClient } from './services/queryClient';
-import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
-import { NativeModules, StyleSheet } from 'react-native';
+import { useFonts } from 'expo-font';
+import {
+  BricolageGrotesque_600SemiBold,
+  BricolageGrotesque_700Bold,
+  BricolageGrotesque_800ExtraBold,
+} from '@expo-google-fonts/bricolage-grotesque';
+import { Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold } from '@expo-google-fonts/geist';
+import { GeistMono_500Medium } from '@expo-google-fonts/geist-mono';
+import { NativeModules, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import Toast from 'react-native-toast-message';
+import { queryClient } from './services/queryClient';
 import AppModal from './components/AppModal';
 import AuthGate from './components/AuthGate';
+import MilestoneHost from './components/MilestoneHost';
 import SongActionsHost from './components/SongActionsHost';
+import { ToastHost } from './components/ui/Toast';
+import { FlightLayer } from './motion/flight';
 import SplashScreen from './screens/SplashScreen';
-import { Colors } from './constants/theme';
 import RootNavigator from './navigation/RootNavigator';
 import { navigationRef } from './navigation/navigationRef';
 import { supabase } from './services/supabase';
 import { useAuthStore } from './store/authStore';
+import { ThemeProvider, useTheme } from './theme/ThemeProvider';
 
 // Configure Google Sign-In if native module is available
 try {
@@ -46,25 +55,70 @@ const loadTrackPlayer = (): TrackPlayerModule | null => {
   }
 };
 
-// Extend React Navigation's DarkTheme with our custom palette
-const RagaStreamTheme = {
-  ...DarkTheme,
-  colors: {
-    ...DarkTheme.colors,
-    primary: Colors.primary,
-    background: Colors.background,
-    card: Colors.surface,
-    text: Colors.onBackground,
-    border: Colors.border,
-    notification: Colors.primary,
-  },
-};
-
-// queryClient is imported from services/queryClient.ts
-
-export default function App() {
+function AppShell() {
+  const theme = useTheme();
   const session = useAuthStore((state) => state.session);
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
+  const [splashDone, setSplashDone] = useState(false);
+  const finishSplash = useCallback(() => setSplashDone(true), []);
+  const [fontsLoaded, fontError] = useFonts({
+    BricolageGrotesque_600SemiBold,
+    BricolageGrotesque_700Bold,
+    BricolageGrotesque_800ExtraBold,
+    Geist_400Regular,
+    Geist_500Medium,
+    Geist_600SemiBold,
+    Geist_700Bold,
+    GeistMono_500Medium,
+  });
+  const fontsReady = fontsLoaded || Boolean(fontError);
+  const ready = hasHydrated && fontsReady;
+
+  const navTheme = useMemo(() => {
+    const base = theme.isDark ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      colors: {
+        ...base.colors,
+        primary: theme.colors.accent,
+        background: theme.colors.bg,
+        card: theme.colors.surface,
+        text: theme.colors.text,
+        border: theme.colors.border,
+        notification: theme.colors.accent,
+      },
+    };
+  }, [theme]);
+
+  return (
+    <View style={[styles.root, { backgroundColor: theme.colors.bg }]}>
+      {ready ? (
+        <NavigationContainer ref={navigationRef} theme={navTheme}>
+          <StatusBar style={splashDone ? (theme.isDark ? 'light' : 'dark') : 'light'} />
+          {session ? (
+            <>
+              <RootNavigator />
+              <SongActionsHost />
+              <MilestoneHost />
+            </>
+          ) : (
+            <AuthGate />
+          )}
+        </NavigationContainer>
+      ) : null}
+      {ready ? (
+        <>
+          <FlightLayer />
+          <ToastHost />
+          <AppModal />
+        </>
+      ) : null}
+      {!splashDone ? <SplashScreen ready={ready} fontsLoaded={fontsReady} onFinish={finishSplash} /> : null}
+    </View>
+  );
+}
+
+export default function App() {
   const setSession = useAuthStore((state) => state.setSession);
 
   // Set up TrackPlayer on launch so lock-screen controls and Bluetooth
@@ -136,25 +190,11 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <GestureHandlerRootView style={styles.root}>
-        <BottomSheetModalProvider>
-          <SafeAreaProvider>
-            <NavigationContainer ref={navigationRef} theme={RagaStreamTheme}>
-              <StatusBar style="light" backgroundColor={Colors.background} />
-              {!hasHydrated ? (
-                <SplashScreen />
-              ) : session ? (
-                <>
-                  <RootNavigator />
-                  <SongActionsHost />
-                </>
-              ) : (
-                <AuthGate />
-              )}
-            </NavigationContainer>
-            <Toast />
-            <AppModal />
-          </SafeAreaProvider>
-        </BottomSheetModalProvider>
+        <SafeAreaProvider>
+          <ThemeProvider>
+            <AppShell />
+          </ThemeProvider>
+        </SafeAreaProvider>
       </GestureHandlerRootView>
     </QueryClientProvider>
   );

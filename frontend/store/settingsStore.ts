@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 export type LibrarySort = 'recents' | 'added' | 'alphabetical';
+export type ThemePreference = 'system' | 'light' | 'dark';
 export type LibraryView = 'list' | 'grid';
 
 export type RecentSearch = {
@@ -23,6 +24,11 @@ const MAX_RECENT_SEARCHES = 12;
 const MAX_RECENT_CONTEXTS = 8;
 
 type SettingsStore = {
+  // Appearance
+  themePreference: ThemePreference;
+  // Riyaz milestones already celebrated (ids), and whether existing ones were seeded silently
+  achievedMilestones: string[];
+  milestonesSeeded: boolean;
   // Playback
   autoplay: boolean;
   privateSession: boolean;
@@ -36,6 +42,8 @@ type SettingsStore = {
   pinnedPlaylistIds: string[];
   recentContexts: RecentContext[];
 
+  setThemePreference: (value: ThemePreference) => void;
+  markMilestones: (ids: string[], seeded?: boolean) => void;
   setAutoplay: (value: boolean) => void;
   setPrivateSession: (value: boolean) => void;
   setPlaybackRate: (rate: number) => void;
@@ -53,6 +61,9 @@ type SettingsStore = {
 export const useSettingsStore = create<SettingsStore>()(
   persist(
     (set) => ({
+      themePreference: 'system',
+      achievedMilestones: [],
+      milestonesSeeded: false,
       autoplay: true,
       privateSession: false,
       playbackRate: 1,
@@ -63,6 +74,12 @@ export const useSettingsStore = create<SettingsStore>()(
       pinnedPlaylistIds: [],
       recentContexts: [],
 
+      setThemePreference: (themePreference) => set({ themePreference }),
+      markMilestones: (ids, seeded) =>
+        set((state) => ({
+          achievedMilestones: [...new Set([...state.achievedMilestones, ...ids])],
+          milestonesSeeded: seeded ?? state.milestonesSeeded,
+        })),
       setAutoplay: (autoplay) => set({ autoplay }),
       setPrivateSession: (privateSession) => set({ privateSession }),
       setPlaybackRate: (playbackRate) => set({ playbackRate }),

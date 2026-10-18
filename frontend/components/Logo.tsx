@@ -1,49 +1,99 @@
-import React from 'react';
-import Svg, { Path, Defs, LinearGradient, Stop } from 'react-native-svg';
+import React, { useEffect } from 'react';
+import { View } from 'react-native';
+import Svg, { Circle, Path } from 'react-native-svg';
+import Animated, {
+  runOnJS,
+  useAnimatedProps,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
+import { Brand, Fonts, Motion } from '../constants/theme';
+import { useTheme } from '../theme/ThemeProvider';
+import Text from './ui/Text';
 
-interface LogoProps {
+/**
+ * The Meend mark: one unbroken stroke — an R whose leg glides into a stream —
+ * ending in a Neel dot, the note it lands on.
+ */
+export const MEEND_PATH =
+  'M14 54 V14 Q14 11 17 11 H33 Q47 11 47 23.5 Q47 36 33 36 H24 C31 36 33 44 39 48.5 C44 52 49 49.5 52 45.5';
+const PATH_LENGTH = 149; // measured from the curve segments above
+const DOT = { cx: 55.5, cy: 41.5, r: 3.6 };
+
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+
+type MarkProps = {
   size?: number;
+  /** Draw the stroke on mount (splash, milestones). */
+  animate?: boolean;
+  delay?: number;
+  onDrawn?: () => void;
+  /** Override colours (e.g. monochrome on an accent fill). */
+  stroke?: string;
+  dot?: string;
+};
+
+export function MeendMark({ size = 48, animate = false, delay = 0, onDrawn, stroke, dot }: MarkProps) {
+  const { isDark } = useTheme();
+  const reduced = useReducedMotion();
+  const play = animate && !reduced;
+  const draw = useSharedValue(play ? 0 : 1);
+  const land = useSharedValue(play ? 0 : 1);
+
+  useEffect(() => {
+    if (!play) {
+      onDrawn?.();
+      return;
+    }
+    // The stroke glides in like a held note; the dot lands as the line arrives.
+    draw.value = withDelay(delay, withTiming(1, { duration: 1100, easing: Motion.easing.glide }));
+    land.value = withDelay(
+      delay + 900,
+      withSequence(
+        withTiming(1.4, { duration: 220, easing: Motion.easing.out }),
+        withTiming(1, { duration: 200, easing: Motion.easing.standard }, (finished) => {
+          if (finished && onDrawn) runOnJS(onDrawn)();
+        })
+      )
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [play]);
+
+  const pathProps = useAnimatedProps(() => ({ strokeDashoffset: PATH_LENGTH * (1 - draw.value) }));
+  const dotProps = useAnimatedProps(() => ({ r: DOT.r * land.value }));
+
+  return (
+    <Svg width={size} height={size} viewBox="0 0 64 64" accessibilityLabel="RagaStream">
+      <AnimatedPath
+        d={MEEND_PATH}
+        fill="none"
+        stroke={stroke ?? (isDark ? Brand.kesar : '#E8620A')}
+        strokeWidth={6.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={PATH_LENGTH}
+        animatedProps={pathProps}
+      />
+      <AnimatedCircle cx={DOT.cx} cy={DOT.cy} fill={dot ?? (isDark ? Brand.neelLight : Brand.neelDeep)} animatedProps={dotProps} />
+    </Svg>
+  );
 }
 
-export default function Logo({ size = 48 }: LogoProps) {
+type LogoProps = MarkProps & { wordmark?: boolean };
+
+/** Mark + wordmark lockup. */
+export default function Logo({ size = 48, wordmark = false, ...rest }: LogoProps) {
+  if (!wordmark) return <MeendMark size={size} {...rest} />;
   return (
-    <Svg width={size} height={size} viewBox="0 0 100 100">
-      <Defs>
-        <LinearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="0%">
-          <Stop offset="0%" stopColor="#7C3AED" stopOpacity={1} />
-          <Stop offset="100%" stopColor="#F5A623" stopOpacity={1} />
-        </LinearGradient>
-      </Defs>
-
-      {/* Top wave — lightest */}
-      <Path
-        d="M15,42 C30,10 45,10 50,38 C55,65 70,68 85,40"
-        fill="none"
-        stroke="url(#lg)"
-        strokeWidth={3.5}
-        strokeLinecap="round"
-        strokeOpacity={0.45}
-      />
-
-      {/* Middle wave — thickest / primary */}
-      <Path
-        d="M15,52 C30,18 45,18 50,48 C55,75 70,78 85,50"
-        fill="none"
-        stroke="url(#lg)"
-        strokeWidth={5}
-        strokeLinecap="round"
-        strokeOpacity={1}
-      />
-
-      {/* Bottom wave — medium */}
-      <Path
-        d="M15,62 C30,28 45,28 50,58 C55,85 70,88 85,60"
-        fill="none"
-        stroke="url(#lg)"
-        strokeWidth={3.5}
-        strokeLinecap="round"
-        strokeOpacity={0.65}
-      />
-    </Svg>
+    <View style={{ alignItems: 'center', flexDirection: 'row', gap: size * 0.22 }}>
+      <MeendMark size={size} {...rest} />
+      <Text style={{ fontFamily: Fonts.display, fontSize: size * 0.5, lineHeight: size * 0.6, letterSpacing: -size * 0.016 }}>
+        RagaStream
+      </Text>
+    </View>
   );
 }
