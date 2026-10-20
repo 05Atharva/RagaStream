@@ -7,6 +7,7 @@ import { activeLineIndex, type Lyrics } from '../hooks/useLyrics';
 import { usePlayerStore } from '../store/playerStore';
 import * as playback from '../services/playbackController';
 import { Layout, Radius, Space } from '../constants/theme';
+import Rise from '../motion/Rise';
 import IconButton from './ui/IconButton';
 import Text from './ui/Text';
 
@@ -20,53 +21,78 @@ type CardProps = {
   background: string;
   ink: string;
   dim: string;
+  /** The "being sung" marker; the same colour as the elapsed seek line. */
+  marker: string;
   onExpand: () => void;
 };
 
-/** Lyrics preview below the Now Playing controls; the sung line lights up. */
-export function LyricsCard({ lyrics, isLoading, isError, background, ink, dim, onExpand }: CardProps) {
+/**
+ * Lyrics as liner notes, below the Now Playing controls. The line being sung
+ * is set larger with a marker beside it; each new line rises into place.
+ */
+export function LyricsCard({ lyrics, isLoading, isError, background, ink, dim, marker, onExpand }: CardProps) {
   const position = usePlayerStore((s) => s.currentPosition);
   const lines = lyrics?.lines ?? [];
   const active = lyrics?.synced ? activeLineIndex(lines, position) : -1;
 
-  const preview = useMemo(() => {
-    if (!lyrics) return [];
+  const { start, preview } = useMemo(() => {
+    if (!lyrics) return { start: 0, preview: [] };
     if (!lyrics.synced) {
-      return (lyrics.plain ?? '').split('\n').filter(Boolean).slice(0, PREVIEW_LINES).map((text, i) => ({ text, index: i }));
+      const plain = (lyrics.plain ?? '').split('\n').filter(Boolean).slice(0, PREVIEW_LINES);
+      return { start: 0, preview: plain.map((text, i) => ({ text, index: i })) };
     }
-    const start = Math.max(0, Math.min(active, lines.length - PREVIEW_LINES));
-    return lines.slice(start, start + PREVIEW_LINES).map((line, i) => ({ text: line.text || '♪', index: start + i }));
+    // One sung line above the current one, the rest below it.
+    const from = Math.max(0, Math.min(active - 1, lines.length - PREVIEW_LINES));
+    return { start: from, preview: lines.slice(from, from + PREVIEW_LINES).map((line, i) => ({ text: line.text || '♪', index: from + i })) };
   }, [lyrics, lines, active]);
+
+  const status = !lyrics ? null : lyrics.synced ? `Synced · ${lyrics.source}` : `Not synced · ${lyrics.source}`;
 
   return (
     <Pressable
       onPress={lyrics ? onExpand : undefined}
       accessibilityRole={lyrics ? 'button' : undefined}
-      accessibilityLabel={lyrics ? 'Open full lyrics' : undefined}
-      style={{ backgroundColor: background, borderRadius: Radius.lg, marginHorizontal: Layout.gutter, minHeight: 184, padding: Space[5], gap: Space[2] }}
+      accessibilityLabel={lyrics ? 'Lyrics. Open full lyrics' : undefined}
+      style={{ backgroundColor: background, borderRadius: Radius.lg, gap: Space[3], marginHorizontal: Layout.gutter, marginTop: Space[4], padding: Space[5] }}
     >
-      <View style={{ alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginBottom: Space[2] }}>
-        <Text variant="label" color={ink}>Lyrics</Text>
-        {lyrics ? <Ionicons name="expand" size={16} color={ink} /> : null}
+      <View style={{ alignItems: 'center', flexDirection: 'row', gap: Space[3] }}>
+        <Text variant="label" color={ink} style={{ flex: 1 }}>Lyrics</Text>
+        {status ? <Text variant="mono" color={ink} numberOfLines={1}>{status}</Text> : null}
       </View>
+
       {isLoading ? (
-        <ActivityIndicator color={ink} style={{ marginTop: Space[8] }} />
+        <ActivityIndicator color={ink} style={{ marginVertical: Space[8] }} />
       ) : !lyrics ? (
         <Text variant="body" color={dim}>
-          {isError ? "Lyrics couldn't load right now. They'll be back shortly." : "We don't have lyrics for this one yet."}
+          {isError ? "Lyrics couldn't load right now. Check your connection, then reopen this song." : "We don't have lyrics for this one yet."}
         </Text>
       ) : (
-        preview.map((line) => (
-          <Text
-            key={line.index}
-            variant="title"
-            numberOfLines={2}
-            color={lyrics.synced && line.index !== active ? dim : ink}
-          >
-            {line.text}
-          </Text>
-        ))
+        <Rise key={lyrics.synced ? start : 'plain'} style={{ gap: Space[2], minHeight: 176 }}>
+          {preview.map((line) => {
+            const isActive = lyrics.synced && line.index === active;
+            return (
+              <View key={line.index} style={{ flexDirection: 'row', gap: Space[3] }}>
+                <View style={{ backgroundColor: isActive ? marker : 'transparent', borderRadius: Radius.pill, width: 3 }} />
+                <Text
+                  variant={isActive ? 'headline' : 'title'}
+                  numberOfLines={2}
+                  color={!lyrics.synced || isActive ? ink : dim}
+                  style={{ flex: 1 }}
+                >
+                  {line.text}
+                </Text>
+              </View>
+            );
+          })}
+        </Rise>
       )}
+
+      {lyrics ? (
+        <View style={{ alignItems: 'center', flexDirection: 'row', gap: Space[2], minHeight: Layout.touchTarget }}>
+          <Text variant="captionStrong" color={ink}>Open full lyrics</Text>
+          <Ionicons name="arrow-forward" size={16} color={ink} />
+        </View>
+      ) : null}
     </Pressable>
   );
 }

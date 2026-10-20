@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Dimensions, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { Dimensions, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import Toast from '../services/toast';
 import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
 import { confirmModal } from '../components/AppModal';
@@ -30,7 +31,7 @@ import { useBottomPadding } from '../hooks/useBottomPadding';
 import { useSettingsStore, type LibrarySort } from '../store/settingsStore';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import { Layout, Radius, Space, Type } from '../constants/theme';
+import { Brand, Layout, Radius, Space, Type } from '../constants/theme';
 import { makeStyles, useColors } from '../theme/ThemeProvider';
 
 type Props = BottomTabScreenProps<BottomTabParamList, 'Library'>;
@@ -41,10 +42,19 @@ type LibraryItem =
   | { kind: 'playlist'; key: string; name: string; playlist: Playlist; pinned: boolean; recency: number; added: number }
   | { kind: 'channel'; key: string; name: string; thumbnail?: string | null; count: number; recency: number };
 
-const SORT_LABELS: Record<LibrarySort, string> = { recents: 'Recents', added: 'Recently added', alphabetical: 'A–Z' };
-const GRID_COLUMNS = 2;
-const GRID_GAP = Space[4];
-const GRID_SIZE = (Dimensions.get('window').width - Layout.gutter * 2 - GRID_GAP) / GRID_COLUMNS;
+const BENTO_ROW = 84;
+const BENTO_GAP = Space[3];
+const BENTO_WIDTH = Dimensions.get('window').width - Layout.gutter * 2;
+const HALF = (BENTO_WIDTH - BENTO_GAP) / 2;
+const SCRIM = [`${Brand.ink}00`, `${Brand.ink}E6`] as const;
+
+type Row = { t: 'letter'; key: string; letter: string } | { t: 'item'; key: string; item: LibraryItem };
+type Tile =
+  | { kind: 'playlist'; key: string; playlist: Playlist }
+  | { kind: 'channel'; key: string; name: string; thumbnail?: string | null; count: number }
+  | { kind: 'new'; key: string };
+
+const songs = (n: number) => `${n} ${n === 1 ? 'song' : 'songs'}`;
 
 export default function LibraryScreen({ navigation }: Props) {
   const styles = useStyles();
@@ -62,23 +72,21 @@ export default function LibraryScreen({ navigation }: Props) {
   const [menuPlaylist, setMenuPlaylist] = useState<Playlist | null>(null);
 
   const librarySort = useSettingsStore((s) => s.librarySort);
-  const libraryView = useSettingsStore((s) => s.libraryView);
   const pinnedIds = useSettingsStore((s) => s.pinnedPlaylistIds);
   const recentContexts = useSettingsStore((s) => s.recentContexts);
   const setLibrarySort = useSettingsStore((s) => s.setLibrarySort);
-  const setLibraryView = useSettingsStore((s) => s.setLibraryView);
   const togglePinned = useSettingsStore((s) => s.togglePinnedPlaylist);
 
   const playlistsQuery = usePlaylists();
   const likedQuery = useLikedSongs();
   const likedSongs = likedQuery.data ?? [];
 
-  const items = useMemo<LibraryItem[]>(() => {
-    const playedAt = new Map(recentContexts.map((c) => [`${c.type}:${c.id}`, c.playedAt]));
-    const q = query.trim().toLowerCase();
+  const alphabetical = librarySort === 'alphabetical';
 
-    const playlistItems: LibraryItem[] = (playlistsQuery.data ?? []).map((playlist) => ({
-      kind: 'playlist',
+  const { playlistItems, channelItems } = useMemo(() => {
+    const playedAt = new Map(recentContexts.map((c) => [`${c.type}:${c.id}`, c.playedAt]));
+    const playlistItems = (playlistsQuery.data ?? []).map((playlist) => ({
+      kind: 'playlist' as const,
       key: `playlist-${playlist.id}`,
       name: playlist.name,
       playlist,
@@ -87,32 +95,67 @@ export default function LibraryScreen({ navigation }: Props) {
       added: Date.parse(playlist.created_at ?? '') || 0,
     }));
 
-    // Channels you've liked songs from — the "Artists" of a YouTube library.
+    // Channels you've liked songs from: the "Artists" of a YouTube library.
     const channelMap = new Map<string, { count: number; thumbnail?: string | null }>();
     likedSongs.forEach((song) => {
       if (!song.channel_name) return;
       const entry = channelMap.get(song.channel_name);
       channelMap.set(song.channel_name, { count: (entry?.count ?? 0) + 1, thumbnail: entry?.thumbnail ?? song.thumbnail_url });
     });
-    const channelItems: LibraryItem[] = [...channelMap.entries()].map(([name, v]) => ({
-      kind: 'channel',
+    const channelItems = [...channelMap.entries()].map(([name, v]) => ({
+      kind: 'channel' as const,
       key: `channel-${name}`,
       name,
       thumbnail: v.thumbnail,
       count: v.count,
       recency: playedAt.get(`channel:${name}`) ?? 0,
     }));
+    return { playlistItems, channelItems };
+  }, [playlistsQuery.data, likedSongs, recentContexts, pinnedIds]);
 
+  // Bento: pinned playlists first, then most recent; the channel with the most liked songs.
+  const tiles = useMemo<Tile[]>(() => {
+    const top = [...playlistItems]
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.recency - a.recency)
+      .slice(0, 3)
+      .map<Tile>((p) => ({ kind: 'playlist', key: p.key, playlist: p.playlist }));
+    const channel = [...channelItems].sort((a, b) => b.count - a.count)[0];
+    return [
+      ...top,
+      { kind: 'new', key: 'new' },
+      ...(channel ? [{ kind: 'channel' as const, key: channel.key, name: channel.name, thumbnail: channel.thumbnail, count: channel.count }] : []),
+    ];
+  }, [playlistItems, channelItems]);
+
+  const rows = useMemo<Row[]>(() => {
+    const q = query.trim().toLowerCase();
     let list: LibraryItem[] = filter === 'playlists' ? playlistItems : filter === 'channels' ? channelItems : [...playlistItems, ...channelItems];
     if (q) list = list.filter((item) => item.name.toLowerCase().includes(q));
-    const value = (item: LibraryItem) =>
-      item.kind === 'playlist' ? (librarySort === 'added' ? item.added : item.recency) : item.kind === 'channel' && librarySort !== 'added' ? item.recency : 0;
-    list = [...list].sort((a, b) => (librarySort === 'alphabetical' ? a.name.localeCompare(b.name) : value(b) - value(a)));
-    list = [...list.filter((i) => i.kind === 'playlist' && i.pinned), ...list.filter((i) => !(i.kind === 'playlist' && i.pinned))];
-
     const showLiked = filter !== 'channels' && (!q || 'liked songs'.includes(q));
-    return showLiked ? [{ kind: 'liked', key: 'liked', name: 'Liked Songs', count: likedSongs.length }, ...list] : list;
-  }, [playlistsQuery.data, likedSongs, recentContexts, pinnedIds, filter, query, librarySort]);
+    const liked: LibraryItem = { kind: 'liked', key: 'liked', name: 'Liked Songs', count: likedSongs.length };
+
+    if (alphabetical) {
+      const sorted = [...(showLiked ? [liked, ...list] : list)].sort((a, b) => a.name.localeCompare(b.name));
+      const out: Row[] = [];
+      let last = '';
+      sorted.forEach((item) => {
+        const first = item.name.trim().charAt(0).toUpperCase();
+        const letter = /[A-Z]/.test(first) ? first : '#';
+        if (letter !== last) {
+          out.push({ t: 'letter', key: `letter-${letter}`, letter });
+          last = letter;
+        }
+        out.push({ t: 'item', key: item.key, item });
+      });
+      return out;
+    }
+
+    const value = (item: LibraryItem) =>
+      item.kind === 'playlist' ? (librarySort === 'added' ? item.added : item.recency) : item.kind === 'channel' ? item.recency : 0;
+    list = [...list].sort((a, b) => value(b) - value(a));
+    list = [...list.filter((i) => i.kind === 'playlist' && i.pinned), ...list.filter((i) => !(i.kind === 'playlist' && i.pinned))];
+    return (showLiked ? [liked, ...list] : list).map((item) => ({ t: 'item', key: item.key, item }));
+  }, [playlistItems, channelItems, likedSongs.length, filter, query, librarySort, alphabetical]);
 
   const openItem = (item: LibraryItem) => {
     if (item.kind === 'liked') root?.navigate('LikedSongs');
@@ -120,10 +163,10 @@ export default function LibraryScreen({ navigation }: Props) {
     else root?.navigate('Channel', { channelName: item.name });
   };
 
-  const cycleSort = () => {
+  const chooseSort = (next: LibrarySort) => {
+    if ((next === 'alphabetical') === alphabetical) return;
     tapHaptic();
-    const order: LibrarySort[] = ['recents', 'added', 'alphabetical'];
-    setLibrarySort(order[(order.indexOf(librarySort) + 1) % order.length]);
+    setLibrarySort(next);
   };
 
   const handleCreate = async () => {
@@ -162,43 +205,150 @@ export default function LibraryScreen({ navigation }: Props) {
     });
   };
 
-  const subtitleFor = (item: LibraryItem) =>
-    item.kind === 'liked' ? `${item.count} songs` : item.kind === 'playlist' ? `Playlist · ${item.playlist.song_count ?? 0} songs` : `Channel · ${item.count} liked`;
+  const metaFor = (item: LibraryItem) =>
+    item.kind === 'liked'
+      ? `Liked Songs · ${songs(item.count)}`
+      : item.kind === 'playlist'
+        ? `Playlist · ${songs(item.playlist.song_count ?? 0)}`
+        : `Channel · ${item.count} liked ${item.count === 1 ? 'song' : 'songs'}`;
 
-  const coverFor = (item: LibraryItem, size: number) => {
-    if (item.kind === 'liked') return <PlaylistCover variant="liked" size={size} borderRadius={Radius.sm} />;
-    if (item.kind === 'playlist') return <PlaylistCover thumbnails={item.playlist.cover_thumbnails} size={size} borderRadius={Radius.sm} />;
-    return <Image source={{ uri: item.thumbnail ?? undefined }} style={{ backgroundColor: colors.surfaceRaised, borderRadius: Radius.pill, height: size, width: size }} contentFit="cover" />;
+  const openPlaylist = (playlist: Playlist) => root?.navigate('Playlist', { playlistId: playlist.id });
+  const openCreate = () => {
+    tapHaptic();
+    setIsCreateVisible(true);
   };
 
-  const pinnedMark = (item: LibraryItem) =>
-    item.kind === 'liked' || (item.kind === 'playlist' && item.pinned) ? <Ionicons name="pin" size={12} color={colors.accentInk} /> : null;
+  const ART = 52;
+  const art = (item: LibraryItem) => {
+    if (item.kind === 'liked') return <PlaylistCover variant="liked" size={ART} borderRadius={Radius.sm} />;
+    if (item.kind === 'playlist') return <PlaylistCover thumbnails={item.playlist.cover_thumbnails} size={ART} borderRadius={Radius.sm} />;
+    return <Image source={{ uri: item.thumbnail ?? undefined }} style={{ backgroundColor: colors.surfaceRaised, borderRadius: Radius.pill, height: ART, width: ART }} contentFit="cover" />;
+  };
 
-  const renderItem = ({ item, index }: { item: LibraryItem; index: number }) =>
-    libraryView === 'grid' ? (
-      <Rise play={firstMount} index={index} style={{ marginBottom: Space[5], width: GRID_SIZE }}>
-        <Tappable onPress={() => openItem(item)} onLongPress={item.kind === 'playlist' ? () => setMenuPlaylist(item.playlist) : undefined}
-          pressScale={0.97} accessibilityRole="button" accessibilityLabel={`${item.name}, ${subtitleFor(item)}`}>
-          {coverFor(item, GRID_SIZE)}
-          <View style={{ gap: 2, marginTop: Space[2] }}>
-            <Text variant="captionStrong" numberOfLines={1}>{item.name}</Text>
-            <View style={styles.subRow}>{pinnedMark(item)}<Text variant="caption" color="textSecondary" numberOfLines={1}>{subtitleFor(item)}</Text></View>
-          </View>
-        </Tappable>
-      </Rise>
-    ) : (
+  const renderRow = ({ item: row, index }: { item: Row; index: number }) => {
+    if (row.t === 'letter') {
+      return <Text variant="display" color="textTertiary" style={styles.letter} accessibilityRole="header">{row.letter}</Text>;
+    }
+    const item = row.item;
+    const pinned = item.kind === 'playlist' && item.pinned;
+    const tag = item.kind === 'liked' ? null : item.kind === 'playlist' ? 'PL' : 'CH';
+    return (
       <Rise play={firstMount} index={index}>
-        <Tappable style={styles.listRow} pressScale={0.985} onPress={() => openItem(item)}
+        <Tappable style={styles.row} pressScale={0.985} onPress={() => openItem(item)}
           onLongPress={item.kind === 'playlist' ? () => setMenuPlaylist(item.playlist) : undefined}
-          accessibilityRole="button" accessibilityLabel={`${item.name}, ${subtitleFor(item)}`}>
-          {coverFor(item, 60)}
+          accessibilityRole="button" accessibilityLabel={`${item.name}, ${metaFor(item)}${pinned ? ', pinned' : ''}`}>
+          {art(item)}
           <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
             <Text variant="subtitle" numberOfLines={1}>{item.name}</Text>
-            <View style={styles.subRow}>{pinnedMark(item)}<Text variant="caption" color="textSecondary" numberOfLines={1}>{subtitleFor(item)}</Text></View>
+            <Text variant="caption" color="textSecondary" numberOfLines={1}>{metaFor(item)}</Text>
+          </View>
+          <View style={styles.tagColumn}>
+            {pinned ? <Ionicons name="pin" size={12} color={colors.accentInk} /> : null}
+            {tag ? <Text variant="mono" color="textTertiary">{tag}</Text> : <Ionicons name="heart" size={13} color={colors.textTertiary} />}
           </View>
         </Tappable>
       </Rise>
     );
+  };
+
+  // Bento tiles
+  const renderTile = (tile: Tile, width: number, index: number) => {
+    const style = [styles.tile, { height: BENTO_ROW, width }];
+    if (tile.kind === 'new') {
+      return (
+        <Rise key={tile.key} play={firstMount} index={index}>
+          <Tappable style={[...style, styles.newTile]} pressScale={0.97} onPress={openCreate} accessibilityRole="button" accessibilityLabel="New playlist">
+            <Ionicons name="add" size={22} color={colors.accentInk} />
+            <Text variant="captionStrong" numberOfLines={1}>New playlist</Text>
+          </Tappable>
+        </Rise>
+      );
+    }
+    const isChannel = tile.kind === 'channel';
+    const name = isChannel ? tile.name : tile.playlist.name;
+    const meta = isChannel ? `Top channel · ${tile.count} liked` : songs(tile.playlist.song_count ?? 0);
+    const artHeight = Math.max(width, BENTO_ROW);
+    return (
+      <Rise key={tile.key} play={firstMount} index={index}>
+        <Tappable
+          style={style}
+          pressScale={0.97}
+          onPress={() => (isChannel ? root?.navigate('Channel', { channelName: tile.name }) : openPlaylist(tile.playlist))}
+          onLongPress={isChannel ? undefined : () => setMenuPlaylist(tile.playlist)}
+          accessibilityRole="button"
+          accessibilityLabel={`${name}, ${meta}`}>
+          <View style={[styles.tileArt, { height: artHeight, top: -(artHeight - BENTO_ROW) / 2 }]}>
+            {isChannel ? (
+              <Image source={{ uri: tile.thumbnail ?? undefined }} style={{ height: '100%', width: '100%' }} contentFit="cover" />
+            ) : (
+              <PlaylistCover thumbnails={tile.playlist.cover_thumbnails} size={width} borderRadius={0} />
+            )}
+          </View>
+          <LinearGradient colors={SCRIM} style={styles.scrim} />
+          <View style={styles.tileText}>
+            <Text variant="captionStrong" color="#FFFFFF" numberOfLines={1}>{name}</Text>
+            <Text variant="caption" color="#FFFFFF" numberOfLines={1} style={{ opacity: 0.8 }}>{meta}</Text>
+          </View>
+        </Tappable>
+      </Rise>
+    );
+  };
+
+  const bento = () => {
+    // Liked Songs spans two rows on the left; the first two other tiles stack beside it.
+    const sideTiles = tiles.slice(0, 2);
+    const rest = tiles.slice(2);
+    const restRows: Tile[][] = [];
+    rest.forEach((t) => {
+      const last = restRows[restRows.length - 1];
+      if (t.kind === 'channel' || !last || last.length === 2 || last[0].kind === 'channel') restRows.push([t]);
+      else last.push(t);
+    });
+    let n = 1;
+    return (
+      <View style={{ gap: BENTO_GAP, marginBottom: Space[6] }}>
+        <Text variant="headline">Your collection</Text>
+        <View style={{ flexDirection: 'row', gap: BENTO_GAP }}>
+          <Rise play={firstMount} index={0}>
+            <Tappable style={[styles.tile, { height: BENTO_ROW * 2 + BENTO_GAP, width: HALF }]} pressScale={0.97}
+              onPress={() => root?.navigate('LikedSongs')} accessibilityRole="button"
+              accessibilityLabel={`Liked Songs, ${songs(likedSongs.length)}`}>
+              <LinearGradient colors={[Brand.kesar, Brand.neelDeep]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.fill} />
+              <View style={styles.likedText}>
+                <Ionicons name="heart" size={28} color="#FFFFFF" />
+                <View>
+                  <Text variant="subtitle" color="#FFFFFF">Liked Songs</Text>
+                  <Text variant="caption" color="#FFFFFF" style={{ opacity: 0.85 }}>{songs(likedSongs.length)}</Text>
+                </View>
+              </View>
+            </Tappable>
+          </Rise>
+          <View style={{ gap: BENTO_GAP }}>{sideTiles.map((t) => renderTile(t, HALF, n++))}</View>
+        </View>
+        {restRows.map((r) => (
+          <View key={r.map((t) => t.key).join('|')} style={{ flexDirection: 'row', gap: BENTO_GAP }}>
+            {r.map((t) => renderTile(t, r.length === 1 ? BENTO_WIDTH : HALF, n++))}
+          </View>
+        ))}
+      </View>
+    );
+  };
+
+  const listHeader = (
+    <View>
+      {!query ? bento() : null}
+      {!query ? <Text variant="headline" style={{ marginBottom: Space[3] }}>Everything</Text> : null}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll} contentContainerStyle={styles.chips}>
+        <Chip label="All" selected={filter === null} onPress={() => setFilter(null)} />
+        <Chip label="Playlists" selected={filter === 'playlists'} onPress={() => setFilter(filter === 'playlists' ? null : 'playlists')} />
+        <Chip label="Channels" selected={filter === 'channels'} onPress={() => setFilter(filter === 'channels' ? null : 'channels')} />
+        <View style={styles.sortGroup}>
+          <Chip label="Recents" selected={!alphabetical} onPress={() => chooseSort('recents')} />
+          <Chip label="A–Z" selected={alphabetical} onPress={() => chooseSort('alphabetical')} />
+        </View>
+      </ScrollView>
+    </View>
+  );
 
   return (
     <SafeAreaView edges={['top']} style={styles.root}>
@@ -219,31 +369,12 @@ export default function LibraryScreen({ navigation }: Props) {
         </View>
       ) : null}
 
-      <View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          <Chip label="Playlists" selected={filter === 'playlists'} onPress={() => setFilter(filter === 'playlists' ? null : 'playlists')} />
-          <Chip label="Channels" selected={filter === 'channels'} onPress={() => setFilter(filter === 'channels' ? null : 'channels')} />
-        </ScrollView>
-      </View>
-
-      <View style={styles.sortRow}>
-        <Pressable onPress={cycleSort} hitSlop={8} style={styles.sortButton} accessibilityRole="button" accessibilityLabel={`Sort by ${SORT_LABELS[librarySort]}`}>
-          <Ionicons name="swap-vertical" size={16} color={colors.text} />
-          <Text variant="captionStrong">{SORT_LABELS[librarySort]}</Text>
-        </Pressable>
-        <IconButton
-          icon={libraryView === 'list' ? 'grid-outline' : 'list-outline'}
-          onPress={() => setLibraryView(libraryView === 'list' ? 'grid' : 'list')}
-          accessibilityLabel={libraryView === 'list' ? 'Show as grid' : 'Show as list'}
-          iconSize={19}
-        />
-      </View>
-
       {playlistsQuery.isLoading || likedQuery.isLoading ? (
         <View style={{ gap: Space[3], paddingHorizontal: Layout.gutter }}>
-          {Array.from({ length: 5 }).map((_, i) => (
+          <SkeletonLoader width="100%" height={BENTO_ROW * 2 + BENTO_GAP} />
+          {Array.from({ length: 4 }).map((_, i) => (
             <View key={i} style={{ alignItems: 'center', flexDirection: 'row', gap: Space[3] }}>
-              <SkeletonLoader width={60} height={60} />
+              <SkeletonLoader width={52} height={52} />
               <View style={{ flex: 1, gap: Space[2] }}>
                 <SkeletonLoader width="60%" height={14} />
                 <SkeletonLoader width="35%" height={11} />
@@ -253,11 +384,11 @@ export default function LibraryScreen({ navigation }: Props) {
         </View>
       ) : (
         <FlashList
-          key={libraryView}
-          data={items}
-          keyExtractor={(item) => item.key}
-          numColumns={libraryView === 'grid' ? GRID_COLUMNS : 1}
-          renderItem={renderItem}
+          data={rows}
+          keyExtractor={(row) => row.key}
+          getItemType={(row) => row.t}
+          renderItem={renderRow}
+          ListHeaderComponent={listHeader}
           contentContainerStyle={{ paddingBottom: bottomPadding, paddingHorizontal: Layout.gutter }}
           ListEmptyComponent={
             query ? (
@@ -336,11 +467,19 @@ const useStyles = makeStyles((t) => ({
     paddingHorizontal: Space[4],
   },
   searchInput: { ...Type.body, color: t.colors.text, flex: 1, height: '100%' },
-  chips: { gap: Space[2], paddingHorizontal: Layout.gutter },
-  sortRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingLeft: Layout.gutter, paddingRight: Space[3], paddingVertical: Space[2] },
-  sortButton: { alignItems: 'center', flexDirection: 'row', gap: Space[2], minHeight: Layout.touchTarget },
-  listRow: { alignItems: 'center', flexDirection: 'row', gap: Space[4], paddingVertical: Space[2] },
-  subRow: { alignItems: 'center', flexDirection: 'row', gap: Space[1] },
+  chipScroll: { marginHorizontal: -Layout.gutter },
+  chips: { alignItems: 'center', gap: Space[2], paddingBottom: Space[2], paddingHorizontal: Layout.gutter },
+  sortGroup: { borderLeftColor: t.colors.border, borderLeftWidth: 1, flexDirection: 'row', gap: Space[2], marginLeft: Space[2], paddingLeft: Space[4] },
+  row: { alignItems: 'center', flexDirection: 'row', gap: Space[4], minHeight: Layout.touchTarget + 16, paddingVertical: Space[2] },
+  tagColumn: { alignItems: 'center', gap: Space[1], justifyContent: 'center', minWidth: Layout.touchTarget - 12 },
+  letter: { paddingBottom: Space[1], paddingTop: Space[4] },
+  tile: { borderRadius: Radius.lg, overflow: 'hidden' },
+  newTile: { alignItems: 'flex-start', backgroundColor: t.colors.surface, borderColor: t.colors.border, borderWidth: 1, gap: Space[1], justifyContent: 'center', paddingHorizontal: Space[4] },
+  tileArt: { left: 0, position: 'absolute', right: 0 },
+  scrim: { bottom: 0, height: '75%', left: 0, position: 'absolute', right: 0 },
+  tileText: { bottom: Space[3], gap: 1, left: Space[3], position: 'absolute', right: Space[3] },
+  fill: { ...StyleSheet.absoluteFillObject },
+  likedText: { flex: 1, justifyContent: 'space-between', padding: Space[4] },
   nameInput: {
     ...Type.headline,
     borderBottomColor: t.colors.accent,
