@@ -105,6 +105,7 @@ export default function SearchScreen({ route, navigation }: Props) {
   const { data: results, isLoading, isFetching, isError, refetch } = useQuery({
     queryKey: ['youtube-search', debouncedQuery],
     enabled: debouncedQuery.length >= MIN_SEARCH_CHARS,
+    staleTime: 30 * 60 * 1000, // matches the backend's search cache
     queryFn: async ({ signal }) => {
       const { data } = await apiClient.get<playback.YouTubeResult[]>('/youtube/search', { params: { q: debouncedQuery, limit: 20 }, signal });
       return data;

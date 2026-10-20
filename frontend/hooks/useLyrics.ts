@@ -23,8 +23,7 @@ export function useLyrics(track: Track | null) {
   return useQuery({
     queryKey: ['lyrics', title, artist],
     enabled: Boolean(title),
-    staleTime: Infinity,
-    gcTime: 30 * 60 * 1000,
+    staleTime: Infinity, // lyrics don't change; kept on the phone with the rest of the cache
     // 503 = LRCLIB busy (worth retrying); 404 = genuinely no lyrics.
     retry: (count, error) => axios.isAxiosError(error) && error.response?.status === 503 && count < 2,
     retryDelay: 3000,

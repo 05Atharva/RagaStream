@@ -27,7 +27,6 @@ export function useArtworkColor(url: string | null | undefined): ArtworkPalette 
     queryKey: ['artwork-color', url],
     enabled: Boolean(url),
     staleTime: Infinity,
-    gcTime: 60 * 60 * 1000,
     retry: false,
     queryFn: async () => {
       const { data: palette } = await apiClient.get<ArtworkPalette>('/artwork/color', {

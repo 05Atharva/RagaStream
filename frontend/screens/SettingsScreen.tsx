@@ -17,7 +17,7 @@ import Text from '../components/ui/Text';
 import Toggle from '../components/ui/Toggle';
 import Rise from '../motion/Rise';
 import { supabase } from '../services/supabase';
-import { queryClient } from '../services/queryClient';
+import { clearQueryCache } from '../services/queryClient';
 import { useAuthStore } from '../store/authStore';
 import { usePlayerStore } from '../store/playerStore';
 import { useSettingsStore, type ThemePreference } from '../store/settingsStore';
@@ -110,7 +110,7 @@ export default function SettingsScreen() {
       confirmLabel: 'Clear',
       icon: 'trash-bin-outline',
       onConfirm: async () => {
-        queryClient.clear();
+        await clearQueryCache();
         await Promise.all([Image.clearMemoryCache(), Image.clearDiskCache()]).catch(() => {});
         Toast.show({ type: 'success', text1: 'Cache cleared' });
       },
