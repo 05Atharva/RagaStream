@@ -173,6 +173,9 @@ Motion is authored by hand on Reanimated primitives (`withTiming`, `withSequence
 | **Pour** | Selection colour floods in (chips, checks, toggles, focused fields) | `ui/Chip`, `ui/CheckMark`, `ui/Toggle`, `ui/TextField` |
 | **Morph** | Play ⇄ pause reshape as one glyph | `motion/PlayPauseIcon.tsx` |
 | **Breath** | Now Playing art eases to 93% when paused, back on play | `NowPlayingScreen.tsx` |
+| **Flip** | Tap the artwork: it turns over in 3D (560ms glide, dips to 95% mid-turn) to show synced lyrics; tap to turn back | `FlipArtwork.tsx` |
+| **Deck** | Cards stack with depth (+12/+24, 0.93/0.86); the top card flies off on an arc and the next promotes forward | `player/DeckArtwork.tsx`, `MiniPlayer.tsx` |
+| **Meend line** | The playhead glides along an S-curve instead of a straight bar | `player/MeendSeek.tsx` |
 | **Draw** | The Meend stroke draws itself | `Logo.tsx` |
 | **Celebrate** | Mark draws, dot lands, glide strokes burst, words rise | `MilestoneHost.tsx` |
 | **Breathing skeleton** | Loading highlight glides across, rests, repeats | `SkeletonLoader.tsx` |
@@ -205,15 +208,18 @@ Motion is authored by hand on Reanimated primitives (`withTiming`, `withSequence
 
 ## 8. Screens (one primary job each)
 
+The four core surfaces have signature layouts of their own — see `docs/SIGNATURE_LAYOUTS.md` for the full spec. In short: **Now Playing** is a card *deck* (next songs peek behind; flick to skip; tap to flip for lyrics) with a liner-notes title, a curved *Meend seek line* and controls on a thumb *arc*; the **Queue** is a *timeline* read like a setlist; **Library** is a *bento* collection over an A–Z *index* with one row shape; the **Mini player** is a *ring capsule* with the next song's card edge peeking behind it.
+
 | Screen | Primary action | Signature moment |
 |---|---|---|
 | Splash | — | Stroke draws, wordmark rises, lifts away |
 | Sign in / Sign up | Continue with Google / Sign in | Giant faint Meend draws behind the form |
-| Home | Tap a Jump back in tile | Prahar wash + raga-of-the-hour greeting |
+| Home | Tap *Pick up where you left off* | Prahar wash, resume deck, trail timeline (see `docs/SIGNATURE_LAYOUTS.md` §5) |
 | Search | Tap a result | Mood tiles with oversized cropped glyphs |
-| Library | Open a playlist | Pins in Kesar; list ⇄ grid |
+| Library | Open a collection | Bento board; A–Z index letters |
 | Playlist / Liked / Channel | Big Kesar play | Hero collapses into the bar; play button pins |
-| Now Playing | Play / pause | Breath, morph, swipe-to-skip with tilt |
+| Now Playing | Play / pause | Deck flick, flip to lyrics, playhead gliding along the Meend line |
+| Queue | Reorder / jump | The timeline draws itself; played songs crossed off |
 | Stats | Switch range | Channel bars fill on arrival |
 | Settings | Toggle a setting | Segmented theme switch with inchworm pill |
 | Milestone | Keep going | The one exaggerated celebration |

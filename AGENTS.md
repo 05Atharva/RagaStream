@@ -14,6 +14,7 @@ Users should finish a session feeling **they made something**: a playlist, a lib
 |---|---|
 | Who it's for, journeys, acceptance criteria | `docs/USER_STORIES.md` |
 | Visual system: brand, colour, type, spacing, motion, components | `frontend/DESIGN.md` |
+| Layout of Now Playing, Queue, Library, Mini player | `docs/SIGNATURE_LAYOUTS.md` |
 | Design tokens in code | `frontend/constants/theme.ts` |
 | Backend endpoints and schema | `backend/README.md`, `backend/schemas.py` |
 | Product requirements (local only, gitignored) | `prd.txt` |
@@ -55,11 +56,13 @@ There is no automated test suite yet. Before saying something works, typecheck, 
 
 ## Architecture rules (non-negotiable)
 
-1. **Playback goes through `services/playbackController.ts`.** Call `playSongs(songs, index, context)`, `startRadio`, `addToQueue`, `playNext`, `next`, `previous`, `togglePlay`, `seek`. Never call `TrackPlayer` directly from UI and never write `currentTrack` / `queue` into `playerStore` from a screen. `audioPlayer.ts` is a one-track engine (RNTP in native builds, expo-av in Expo Go) and knows nothing about queues.
+1. **Playback goes through `services/playbackController.ts`.** Call `playSongs(songs, index, context)`, `startRadio`, `addToQueue`, `playNext`, `next`, `previous`, `togglePlay`, `seek`. Never call `TrackPlayer` directly from UI and never write `currentTrack` / `queue` into `playerStore` from a screen. `audioPlayer.ts` is a one-track engine (RNTP in native builds, expo-av in Expo Go) and knows nothing about queues. Audio is always loaded from the backend relay, never from a YouTube URL directly: YouTube locks stream URLs to the extracting IP, so a phone that hops to mobile data would get 403s mid-song. Get the link from `GET /youtube/stream` (`audio_path`, signed, valid 12h); players can't send our auth header, so the relay checks that signature instead.
 2. **Song actions are global.** Open the menu with `openSongMenu(song, options)` and the save sheet with `openSaveSheet(song)`. Don't build per-screen menus.
 3. **Library mutations live in `services/libraryActions.ts`** (like, save to playlist, remove, share, create). They update the React Query cache. Query keys: `['liked']`, `['playlists']` (summaries), `['playlist', id]`, `['playlist-containing', youtubeId]`, `['history', …]`.
 4. **Persisted user preferences live in `store/settingsStore.ts`.**
-5. Backend: every user-data endpoint depends on `get_current_user`; the DB client uses the service-role key. Don't log secrets; never commit `.env` or `backend/cookies.txt`.
+5. Keep yt-dlp current (`pip install -U yt-dlp`). A `googlevideo.com` 403 on playback almost always means YouTube changed and yt-dlp needs updating, not an app bug.
+6. **Caching.** React Query is the app's cache (`services/queryClient.ts`): 5-minute `staleTime`, and the library families (`liked`, `playlists`, `playlist`, `history`, `songs`, `lyrics`, `artwork-color`, `genre-home`) are saved to AsyncStorage for 7 days. When you add a query family, add it to `SAVED` only if it is per-user library data or a slow, stable lookup; bump `CACHE_VERSION` if you change the shape of a saved response. Mutations must update or invalidate the cache (that's what makes the long `staleTime` safe). `clearQueryCache()` runs on sign-out. The backend keeps in-memory caches too: stream links 30 min, search 30 min, radio 1 h, lyrics and colours 24 h (they reset when uvicorn restarts).
+7. **Security.** Every backend endpoint requires a signed-in user (`get_current_user`, router-level in `main.py` or per route) except `/health` and the signed audio relay; user-data queries also filter by `user_id`. The DB client uses the service-role key; the public roles (`anon`, `authenticated`) have **no** table access (`backend/harden_security.sql`), so the app must never query Supabase tables directly — add a backend endpoint instead. New tables: enable RLS and re-run that script. Don't log secrets or tokens; never commit `.env` or `backend/cookies.txt`.
 
 ## Design rules
 

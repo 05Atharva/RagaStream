@@ -62,7 +62,7 @@ As a new user with no history, I want Home to already have something good to pla
 
 **US-03 · Resume in one tap**
 As Aditi, I want what I last played to be the first thing I see, so I can resume with my thumb.
-- "Jump back in" sits in the top third of Home; the mini player persists across tabs.
+- "Pick up where you left off" sits in the top third of Home, and "Your trail" lists the playlists, channels and radios you were in; the mini player persists across tabs.
 - Tapping a card starts playback within one tap; a loading state appears on the card itself, not a full-screen spinner.
 
 **US-04 · Skip without looking**
