@@ -198,5 +198,10 @@ export async function stopPlayback(): Promise<void> {
   await unloadSound();
 }
 
+/** False when Expo Go's player has no sound loaded (unloaded, failed, or never started). */
+export function hasLoadedTrack(): boolean {
+  return isTrackPlayerAvailable || _sound !== null;
+}
+
 /** True when running in a native build with full TrackPlayer support. */
 export { isTrackPlayerAvailable };

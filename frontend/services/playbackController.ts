@@ -116,6 +116,22 @@ const STREAM_TTL_MS = 60 * 60 * 1000; // YouTube URLs live ~6h; stay well inside
 const streamCache = new Map<string, { url: string; expiresAt: number }>();
 const streamInflight = new Map<string, Promise<string>>();
 
+/**
+ * Players read audio from our backend relay rather than YouTube directly:
+ * YouTube locks each URL to the extracting IP, so a phone that drifts onto
+ * mobile data mid-song would get a 403. The backend signs each relay link
+ * (players can't send our auth header), valid for 12h. `bust` defeats
+ * player-side caching after a fresh extraction.
+ */
+function relayUrl(audioPath: string, bust = false) {
+  const base = (apiClient.defaults?.baseURL ?? '').replace(/\/$/, '');
+  return `${base}${audioPath}${bust ? `&v=${Date.now()}` : ''}`;
+}
+
+/**
+ * Validates the video and warms the backend's extraction cache (fast failure
+ * for unavailable songs), then returns the signed relay URL the engine should load.
+ */
 async function resolveStreamUrl(youtubeId: string, fresh = false): Promise<string> {
   const cached = streamCache.get(youtubeId);
   if (!fresh && cached && cached.expiresAt > Date.now()) return cached.url;
@@ -123,10 +139,11 @@ async function resolveStreamUrl(youtubeId: string, fresh = false): Promise<strin
   if (!fresh && pending) return pending;
 
   const request = apiClient
-    .get<{ stream_url: string }>('/youtube/stream', { params: { id: youtubeId } })
+    .get<{ audio_path: string }>('/youtube/stream', { params: { id: youtubeId, fresh: fresh || undefined } })
     .then(({ data }) => {
-      streamCache.set(youtubeId, { url: data.stream_url, expiresAt: Date.now() + STREAM_TTL_MS });
-      return data.stream_url;
+      const url = relayUrl(data.audio_path, fresh);
+      streamCache.set(youtubeId, { url, expiresAt: Date.now() + STREAM_TTL_MS });
+      return url;
     })
     .finally(() => streamInflight.delete(youtubeId));
   streamInflight.set(youtubeId, request);
@@ -194,6 +211,7 @@ let playToken = 0;
 
 async function startTrack(track: Track, index: number, fromUserQueue = false, startPosition = 0) {
   const token = ++playToken;
+  beginTrackWatch();
   set({
     currentTrack: track,
     currentIndex: index,
@@ -203,9 +221,20 @@ async function startTrack(track: Track, index: number, fromUserQueue = false, st
     currentPosition: startPosition,
     duration: track.durationSec ?? 0,
   });
-  const url = await resolveStreamUrl(getYoutubeId(track));
+  const youtubeId = getYoutubeId(track);
+  const url = await resolveStreamUrl(youtubeId);
   if (token !== playToken) return;
-  await engine.loadAndPlay({ ...track, url }, startPosition);
+  try {
+    await engine.loadAndPlay({ ...track, url }, startPosition);
+  } catch {
+    // Cached links can go stale or be rejected by YouTube (403). Fetch a
+    // fresh one, bypassing both caches, and try once more before giving up.
+    if (token !== playToken) return;
+    streamCache.delete(youtubeId);
+    const freshUrl = await resolveStreamUrl(youtubeId, true);
+    if (token !== playToken) return;
+    await engine.loadAndPlay({ ...track, url: freshUrl }, startPosition);
+  }
   if (token !== playToken) return;
   void onTrackStarted(track);
   prefetchUpcoming();
@@ -312,7 +341,7 @@ async function advance(attempt = 0): Promise<void> {
       const extended = await maybeExtendWithAutoplay(true);
       index = get().currentIndex + 1;
       if (!extended || index >= get().queue.length) {
-        await engine.pausePlayback();
+        await pause();
         return;
       }
     }
@@ -327,7 +356,7 @@ export async function next({ auto = false }: { auto?: boolean } = {}): Promise<v
 
   if (auto && state.sleepTimer.endOfTrack) {
     cancelSleepTimer();
-    await engine.pausePlayback();
+    await pause();
     Toast.show({ type: 'info', text1: 'Sleep timer ended', text2: 'Playback paused' });
     return;
   }
@@ -357,9 +386,39 @@ export async function togglePlay(): Promise<void> {
   const state = get();
   if (!state.currentTrack) return;
   if (state.isPlaying) {
-    await engine.pausePlayback();
-  } else {
-    await engine.resumePlayback();
+    // Pausing a song that had silently stalled: remember to reload on resume.
+    if (isStalled()) needsReload = true;
+    await pause();
+    return;
+  }
+  if (needsReload || !engine.hasLoadedTrack()) {
+    needsReload = false;
+    await reloadCurrent();
+    return;
+  }
+  setIntent(true);
+  await engine.resumePlayback();
+}
+
+/** Pause and record that the user (or the app) chose silence. */
+async function pause() {
+  setIntent(false);
+  await engine.pausePlayback();
+}
+
+/** Reload the current track at its position from a freshly extracted URL. */
+async function reloadCurrent(): Promise<void> {
+  const state = get();
+  const track = state.currentTrack;
+  if (!track) return;
+  setIntent(true);
+  set({ isLoading: true, isPlaying: true });
+  try {
+    const url = await resolveStreamUrl(getYoutubeId(track), true);
+    await engine.loadAndPlay({ ...track, url }, state.currentPosition);
+  } catch {
+    set({ isLoading: false, isPlaying: false });
+    Toast.show({ type: 'error', text1: "Couldn't resume this song", text2: 'Check your connection, then press play again.' });
   }
 }
 
@@ -368,6 +427,7 @@ export async function seek(positionSeconds: number): Promise<void> {
 }
 
 export async function stop(): Promise<void> {
+  setIntent(false);
   await engine.stopPlayback();
 }
 
@@ -574,7 +634,7 @@ export function setSleepTimer(minutes: number | 'endOfTrack') {
   set({ sleepTimer: { endsAt: Date.now() + durationMs, endOfTrack: false } });
   sleepTimeout = setTimeout(() => {
     cancelSleepTimer();
-    void engine.pausePlayback();
+    void pause();
     Toast.show({ type: 'info', text1: 'Sleep timer ended', text2: 'Playback paused' });
   }, durationMs);
   Toast.show({ type: 'success', text1: `Sleep timer set for ${minutes} minutes` });
@@ -616,6 +676,7 @@ async function recoverFromError() {
 
   recovering = true;
   lastRecoveryAt = Date.now();
+  setIntent(true);
   set({ showReconnecting: true });
   try {
     const url = await resolveStreamUrl(getYoutubeId(track), true);
@@ -628,6 +689,50 @@ async function recoverFromError() {
     set({ showReconnecting: false });
   }
 }
+
+// ── Stall watchdog ────────────────────────────────────────────────────────────
+// A stream can stop delivering without the player reporting an error (it just
+// buffers forever). If we intend to be playing, the song had started, and the
+// position hasn't moved for STALL_MS, reconnect at the current position.
+
+const STALL_MS = 9000;
+let wantsToPlay = false;
+let progressedThisTrack = false;
+let needsReload = false;
+let lastAdvanceAt = Date.now();
+let lastSeenPosition = -1;
+
+function setIntent(play: boolean) {
+  wantsToPlay = play;
+  lastAdvanceAt = Date.now();
+}
+
+function beginTrackWatch() {
+  setIntent(true);
+  progressedThisTrack = false;
+  needsReload = false;
+  lastSeenPosition = -1;
+}
+
+function isStalled() {
+  return wantsToPlay && progressedThisTrack && Date.now() - lastAdvanceAt > STALL_MS;
+}
+
+usePlayerStore.subscribe((state) => {
+  if (state.currentPosition === lastSeenPosition) return;
+  if (state.currentPosition > lastSeenPosition && state.currentPosition > 0) progressedThisTrack = true;
+  lastSeenPosition = state.currentPosition;
+  lastAdvanceAt = Date.now();
+});
+
+const watchdog = setInterval(() => {
+  if (isStalled() && !recovering) {
+    lastAdvanceAt = Date.now();
+    void recoverFromError();
+  }
+}, 3000);
+// Node (tests) only: don't keep the process alive for the watchdog.
+(watchdog as unknown as { unref?: () => void }).unref?.();
 
 engine.setEngineHandlers({
   onEnded: () => void next({ auto: true }),
