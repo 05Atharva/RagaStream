@@ -4,11 +4,13 @@ RagaStream FastAPI backend — entry point.
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+import os
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routers import admin, history, liked, media, playlists, search, songs, youtube
+from auth import get_current_user
 from db import get_supabase
 
 logging.basicConfig(level=logging.INFO)
@@ -53,11 +55,14 @@ app = FastAPI(
     redirect_slashes=False,   # prevent 307s that strip Authorization headers
 )
 
-# CORS — allow all origins for development
+# CORS only matters for browsers; the phone app ignores it. Auth is a Bearer
+# token, not a cookie, so credentials stay off. Set CORS_ORIGINS (comma-separated)
+# to restrict browser access in production.
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -66,15 +71,19 @@ app.add_middleware(
 # Routers
 # ---------------------------------------------------------------------------
 
-app.include_router(songs.router,        prefix="/songs",  tags=["Songs"])
-app.include_router(songs.genres_router, prefix="/genres", tags=["Songs"])
+# Every route needs a signed-in user except /health and the audio relay
+# (which checks a signed link instead; see routers/youtube.py).
+_signed_in = [Depends(get_current_user)]
+
+app.include_router(songs.router,        prefix="/songs",  tags=["Songs"], dependencies=_signed_in)
+app.include_router(songs.genres_router, prefix="/genres", tags=["Songs"], dependencies=_signed_in)
 app.include_router(youtube.router,   prefix="/youtube",   tags=["YouTube"])
 app.include_router(playlists.router, prefix="/playlists", tags=["Playlists"])
 app.include_router(liked.router,     prefix="/liked",     tags=["Liked"])
 app.include_router(history.router,   prefix="/history",   tags=["History"])
-app.include_router(search.router,    prefix="/search",    tags=["Search"])
+app.include_router(search.router,    prefix="/search",    tags=["Search"], dependencies=_signed_in)
 app.include_router(admin.router,     prefix="/admin",     tags=["Admin"])
-app.include_router(media.router,                          tags=["Media"])
+app.include_router(media.router,                          tags=["Media"], dependencies=_signed_in)
 
 
 @app.get("/health", tags=["Health"])

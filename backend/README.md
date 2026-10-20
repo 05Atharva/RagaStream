@@ -46,14 +46,19 @@ copy .env.example .env
 
 ```env
 SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_KEY=your-supabase-service-role-key
-SUPABASE_JWT_SECRET=your-supabase-jwt-secret
+SUPABASE_KEY=your-supabase-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+# Optional
+AUDIO_LINK_SECRET=long-random-string
+CORS_ORIGINS=https://your-web-app.example
 ```
 
 > Get these from your Supabase project:
 > - **SUPABASE_URL** → Project Settings → API → Project URL
-> - **SUPABASE_KEY** → Project Settings → API → `service_role` secret key
-> - **SUPABASE_JWT_SECRET** → Project Settings → API → JWT Secret
+> - **SUPABASE_KEY** → Project Settings → API → `anon` / publishable key (used to verify sign-ins)
+> - **SUPABASE_SERVICE_ROLE_KEY** → Project Settings → API → `service_role` secret key (database access; never ship it in the app)
+> - **AUDIO_LINK_SECRET** (optional) → signs audio relay links. Defaults to a value derived from the service-role key. Set it explicitly in production so you can rotate it on its own.
+> - **CORS_ORIGINS** (optional) → comma-separated browser origins allowed to call the API. The phone app doesn't need it; defaults to `*`.
 
 ---
 
@@ -80,9 +85,12 @@ The API will be available at:
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/health` | Health check |
-| GET | `/youtube/search?q=` | Search YouTube |
-| GET | `/youtube/stream?id=` | Get audio stream URL |
+| GET | `/health` | Health check (no sign-in) |
+| GET | `/youtube/search?q=` | Search YouTube (cached 30 min) |
+| GET | `/youtube/stream?id=` | Check a song is playable; returns a signed `audio_path` |
+| GET/HEAD | `/youtube/audio/{id}?exp=&sig=` | Audio relay with Range support. Needs the signed link from `/youtube/stream`, not a sign-in |
+| GET | `/youtube/radio?id=` | Song radio (cached 1 h) |
+| GET | `/lyrics`, `/artwork/color` | Synced lyrics, artwork palette (cached 24 h) |
 | GET | `/songs` | List song catalogue |
 | POST | `/songs` | Save song to catalogue |
 | GET | `/genres` | List genres with count |
@@ -91,6 +99,8 @@ The API will be available at:
 | GET `/POST /PUT /DELETE` | `/playlists` | Playlists CRUD |
 | GET | `/search?q=` | Search catalogue |
 | * | `/admin/*` | Admin-only operations |
+
+Every endpoint except `/health` and the audio relay needs `Authorization: Bearer <Supabase access token>`. Verified tokens are cached for up to 5 minutes.
 
 ---
 
@@ -157,26 +167,15 @@ CREATE TABLE IF NOT EXISTS play_history (
 CREATE INDEX IF NOT EXISTS idx_play_history_user ON play_history(user_id, played_at DESC);
 ```
 
-### Row-Level Security (RLS)
+### Security (RLS and grants)
 
-```sql
-ALTER TABLE songs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Public read" ON songs FOR SELECT USING (true);
-CREATE POLICY "Authenticated write" ON songs FOR ALL USING (auth.role() = 'authenticated');
+Run `harden_security.sql` (in this folder) in the SQL Editor once, after creating the tables, and again after any schema change. The app only reaches data through this backend, which uses the service-role key, so the script:
 
-ALTER TABLE playlists ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Own playlists" ON playlists FOR ALL USING (auth.uid() = user_id);
+- removes all direct table access for `anon` (anyone holding the app's public key) and `authenticated` (any signed-in user);
+- keeps RLS on with own-rows-only policies as a second line of defence, and makes the shared `songs` catalogue read-only to users;
+- stops new tables from being auto-granted to those roles.
 
-ALTER TABLE playlist_songs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Own playlist songs" ON playlist_songs FOR ALL
-  USING (EXISTS (SELECT 1 FROM playlists WHERE playlists.id = playlist_songs.playlist_id AND playlists.user_id = auth.uid()));
-
-ALTER TABLE liked_songs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Own likes" ON liked_songs FOR ALL USING (auth.uid() = user_id);
-
-ALTER TABLE play_history ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Own history" ON play_history FOR ALL USING (auth.uid() = user_id);
-```
+The queries at the end of the script show the result: no grants for the public roles, RLS on for every table. When you add a table, enable RLS on it as well.
 
 ---
 

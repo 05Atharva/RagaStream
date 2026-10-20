@@ -8,8 +8,12 @@ internal HTTP headers and contaminates the service_role client, causing
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import os
-from typing import Optional
+import time
+from typing import Dict, Optional, Tuple
 
 import httpx
 from fastapi import Depends, HTTPException, status
@@ -30,6 +34,24 @@ _SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 _SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 
+# Verified tokens, so every request doesn't wait on a round-trip to Supabase.
+# { sha256(token): (user_id, expires_at) } — never stores the token itself.
+# A signed-out token can keep working for up to TOKEN_CACHE_SECONDS.
+TOKEN_CACHE_SECONDS = 5 * 60
+TOKEN_CACHE_MAX_ENTRIES = 2000
+_token_cache: Dict[str, Tuple[str, float]] = {}
+
+
+def _token_expiry(token: str) -> Optional[float]:
+    """The token's own `exp` claim (read only after Supabase has verified it)."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return float(json.loads(base64.urlsafe_b64decode(payload))["exp"])
+    except Exception:
+        return None
+
+
 async def _verify_token(token: str) -> dict | None:
     """
     Verify a Supabase access token via direct HTTP call.
@@ -40,11 +62,36 @@ async def _verify_token(token: str) -> dict | None:
         "Authorization": f"Bearer {token}",
         "apikey": _SUPABASE_KEY,
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, headers=headers)
         if resp.status_code == 200:
             return resp.json()
     return None
+
+
+async def _user_id_for(token: str) -> Optional[str]:
+    now = time.time()
+    key = hashlib.sha256(token.encode()).hexdigest()
+    hit = _token_cache.get(key)
+    if hit and hit[1] > now:
+        return hit[0]
+
+    user_data = await _verify_token(token)
+    if not user_data or "id" not in user_data:
+        _token_cache.pop(key, None)
+        return None
+
+    expires_at = now + TOKEN_CACHE_SECONDS
+    token_exp = _token_expiry(token)
+    if token_exp is not None:
+        expires_at = min(expires_at, token_exp)
+    if len(_token_cache) >= TOKEN_CACHE_MAX_ENTRIES:
+        for stale in [k for k, (_, exp) in _token_cache.items() if exp <= now]:
+            _token_cache.pop(stale, None)
+        if len(_token_cache) >= TOKEN_CACHE_MAX_ENTRIES:
+            _token_cache.pop(next(iter(_token_cache)))
+    _token_cache[key] = (user_data["id"], expires_at)
+    return user_data["id"]
 
 
 async def get_current_user(
@@ -60,15 +107,15 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user_data = await _verify_token(credentials.credentials)
-    if not user_data or "id" not in user_data:
+    user_id = await _user_id_for(credentials.credentials)
+    if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return {"user_id": user_data["id"]}
+    return {"user_id": user_id}
 
 
 async def get_current_admin(user: dict = Depends(get_current_user)) -> dict:

@@ -19,12 +19,12 @@ class YouTubeSearchResult(BaseModel):
 
 
 class YouTubeStreamResponse(BaseModel):
-    stream_url: str
+    audio_path: str        # signed relay path: /youtube/audio/{id}?exp=…&sig=…
     title: str
     channel: str
     duration: int
     thumbnail: str
-    expires_in: int        # seconds until cache expiry
+    expires_in: int        # seconds until the audio link expires
 
 
 # ---------------------------------------------------------------------------
