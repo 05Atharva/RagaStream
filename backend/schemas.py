@@ -3,7 +3,7 @@ Pydantic schemas for API request/response serialisation.
 """
 from __future__ import annotations
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
@@ -45,13 +45,14 @@ class SongResponse(BaseModel):
 
 
 class SongCreateRequest(BaseModel):
-    youtube_id: str
-    title: str
-    channel_name: str
-    thumbnail_url: Optional[str] = None
-    duration_sec: Optional[int] = None
-    language: Optional[str] = None
-    genre: Optional[str] = None
+    # Shared catalogue: bound every field so one account can't store junk for everyone.
+    youtube_id: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
+    title: str = Field(min_length=1, max_length=300)
+    channel_name: str = Field(min_length=1, max_length=200)
+    thumbnail_url: Optional[str] = Field(default=None, max_length=500)
+    duration_sec: Optional[int] = Field(default=None, ge=0, le=86_400)
+    language: Optional[str] = Field(default=None, max_length=50)
+    genre: Optional[str] = Field(default=None, max_length=50)
 
 
 class GenreCountResponse(BaseModel):

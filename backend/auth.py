@@ -1,5 +1,5 @@
 """
-JWT authentication helpers for Supabase-issued access tokens.
+JWT authentication and owner-approval helpers for Supabase-issued access tokens.
 
 Uses a direct HTTP call to Supabase Auth API (GET /auth/v1/user) to verify
 tokens.  This avoids using supabase-py's auth.get_user() which mutates
@@ -11,18 +11,21 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import time
 from typing import Dict, Optional, Tuple
 
 import httpx
 from fastapi import Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from dotenv import load_dotenv
 
 from db import get_supabase
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -62,11 +65,21 @@ async def _verify_token(token: str) -> dict | None:
         "Authorization": f"Bearer {token}",
         "apikey": _SUPABASE_KEY,
     }
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(url, headers=headers)
-        if resp.status_code == 200:
-            return resp.json()
-    return None
+    # Only Supabase saying "this token is bad" (401/403) may become our 401: the app
+    # signs the user out on a 401. A Supabase outage, rate limit or timeout must not
+    # throw everyone out, so those are a 503 ("try again").
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Sign-in check is unavailable right now. Try again in a moment.") from exc
+    if resp.status_code == 200:
+        return resp.json()
+    if resp.status_code in (401, 403):
+        return None
+    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Sign-in check is unavailable right now. Try again in a moment.")
 
 
 async def _user_id_for(token: str) -> Optional[str]:
@@ -94,11 +107,13 @@ async def _user_id_for(token: str) -> Optional[str]:
     return user_data["id"]
 
 
-async def get_current_user(
+async def get_signed_in_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> dict:
     """
-    Validate the Bearer token via Supabase and return the authenticated user id.
+    Validate the Bearer token via Supabase and return the signed-in user id.
+    Does NOT check approval: only for routes that must answer before approval
+    (GET /me/access). Everything else uses get_current_user.
     """
     if not credentials:
         raise HTTPException(
@@ -116,6 +131,117 @@ async def get_current_user(
         )
 
     return {"user_id": user_id}
+
+
+# ---------------------------------------------------------------------------
+# Owner approval (public.user_access, see access_schema.sql)
+# ---------------------------------------------------------------------------
+
+# { user_id: (status, expires_at) }. Approved users are re-checked every 10
+# minutes, others every 30 seconds so an approval shows up quickly.
+APPROVED_CACHE_SECONDS = 10 * 60
+WAITING_CACHE_SECONDS = 30
+ACCESS_CACHE_MAX_ENTRIES = 2000
+_access_cache: Dict[str, Tuple[str, float]] = {}
+
+ACCESS_MESSAGES = {
+    "pending": "Your account is waiting for the owner's approval. You'll get an email when you're in.",
+    "rejected": "The owner declined this account, so RagaStream can't open for you.",
+}
+
+
+class ApprovalNotInstalled(Exception):
+    """public.user_access doesn't exist yet (access_schema.sql not applied)."""
+
+
+# Approval switches on when its table exists. Until then the gate stands aside
+# (exactly the old behaviour) instead of locking everyone out with 503s.
+NOT_INSTALLED_CACHE_SECONDS = 60
+_warned_not_installed = False
+
+
+def _is_missing_table(exc: Exception) -> bool:
+    text = str(exc)
+    return "PGRST205" in text or "42P01" in text or "Could not find the table" in text
+
+
+def fetch_access_row(user_id: str) -> Optional[dict]:
+    """The user's user_access row, or None when there isn't one.
+    Raises ApprovalNotInstalled when the table is missing, and other errors as they are."""
+    try:
+        result = (
+            get_supabase()
+            .table("user_access")
+            .select("status, email")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_missing_table(exc):
+            raise ApprovalNotInstalled() from exc
+        raise
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def clear_access_cache(user_id: Optional[str] = None) -> None:
+    if user_id is None:
+        _access_cache.clear()
+    else:
+        _access_cache.pop(user_id, None)
+
+
+async def _access_status(user_id: str) -> str:
+    """'approved', 'pending' or 'rejected'. A missing row counts as pending (fail closed)."""
+    now = time.time()
+    hit = _access_cache.get(user_id)
+    if hit and hit[1] > now:
+        return hit[0]
+
+    global _warned_not_installed
+    try:
+        row = await run_in_threadpool(fetch_access_row, user_id)
+    except ApprovalNotInstalled:
+        if not _warned_not_installed:
+            logger.warning("Owner approval is OFF: public.user_access is missing. Apply backend/access_schema.sql to turn it on.")
+            _warned_not_installed = True
+        _access_cache[user_id] = ("approved", now + NOT_INSTALLED_CACHE_SECONDS)
+        return "approved"
+    except Exception as exc:
+        logger.warning("Could not read user_access: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not check your account access right now. Try again in a moment.",
+        ) from exc
+
+    value = row.get("status") if row else None
+    if value not in ("approved", "pending", "rejected"):
+        value = "pending"
+
+    ttl = APPROVED_CACHE_SECONDS if value == "approved" else WAITING_CACHE_SECONDS
+    if len(_access_cache) >= ACCESS_CACHE_MAX_ENTRIES:
+        for stale in [k for k, (_, exp) in _access_cache.items() if exp <= now]:
+            _access_cache.pop(stale, None)
+        if len(_access_cache) >= ACCESS_CACHE_MAX_ENTRIES:
+            _access_cache.pop(next(iter(_access_cache)))
+    _access_cache[user_id] = (value, now + ttl)
+    return value
+
+
+async def get_current_user(user: dict = Depends(get_signed_in_user)) -> dict:
+    """
+    The dependency every route uses: a signed-in user the owner has approved.
+    401 for a bad token, 403 {code: access_pending | access_rejected} otherwise.
+    """
+    access = await _access_status(user["user_id"])
+    if access != "approved":
+        code = "access_rejected" if access == "rejected" else "access_pending"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": code, "message": ACCESS_MESSAGES[access]},
+        )
+    return user
 
 
 async def get_current_admin(user: dict = Depends(get_current_user)) -> dict:
