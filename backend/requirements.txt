@@ -2,7 +2,8 @@ fastapi==0.111.0
 uvicorn==0.29.0
 supabase==2.7.4
 python-dotenv==1.0.1
-yt-dlp>=2026.8.19   # YouTube changes often; older releases get 403 on stream URLs
+yt-dlp[default]>=2026.8.19   # YouTube changes often; older releases get 403 on stream URLs
+yt-dlp-ejs>=0.8.0            # YouTube's JS challenge solver scripts (run with Node, see Dockerfile)
 python-multipart==0.0.9
 httpx==0.27.2
 websockets==13.1

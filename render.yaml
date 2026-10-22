@@ -1,0 +1,25 @@
+# Render blueprint for the RagaStream API (see docs/DEPLOY.md).
+# Dashboard → New → Blueprint → pick this repo. Values marked sync:false are asked for once.
+services:
+  - type: web
+    name: ragastream-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free            # sleeps after ~15 min idle; first request then takes ~1 min (see DEPLOY.md)
+    region: singapore     # closest Render region to India
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY              # anon / publishable key (verifies sign-ins)
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY # service_role secret (database access)
+        sync: false
+      - key: AUDIO_LINK_SECRET         # signs audio relay links
+        generateValue: true
+      - key: OWNER_EMAILS
+        value: atharvakanawade@gmail.com
+      - key: YTDLP_COOKIES_FILE        # upload cookies.txt as a Secret File (DEPLOY.md step 2)
+        value: /etc/secrets/cookies.txt
