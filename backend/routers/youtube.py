@@ -10,10 +10,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
 import re
 import secrets
+import shutil
+import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
@@ -33,11 +36,73 @@ router = APIRouter()
 # YTDLP_COOKIES_FILE takes precedence — a Netscape-format cookies.txt export,
 # needed when live browser decryption fails (e.g. Chrome App-Bound Encryption / DPAPI).
 YTDLP_COOKIES_FROM_BROWSER = os.environ.get("YTDLP_COOKIES_FROM_BROWSER")
-YTDLP_COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE")
-if YTDLP_COOKIES_FILE and not os.path.isfile(YTDLP_COOKIES_FILE):
-    # e.g. Render's secret file not uploaded yet: run without cookies rather than fail every request.
-    logging.getLogger(__name__).warning("YTDLP_COOKIES_FILE %s not found; continuing without cookies.", YTDLP_COOKIES_FILE)
-    YTDLP_COOKIES_FILE = None
+
+
+def _usable_cookie_file(path: Optional[str]) -> Optional[str]:
+    """The cookies file yt-dlp should use, or None.
+
+    yt-dlp writes refreshed cookies back to this file when it finishes. Render
+    mounts secret files read-only (/etc/secrets), and that write used to crash
+    every stream request, so a read-only file is copied somewhere writable.
+    """
+    log = logging.getLogger(__name__)
+    if not path:
+        return None
+    if not os.path.isfile(path):
+        # e.g. Render's secret file not uploaded yet: run without cookies rather than fail every request.
+        log.warning("YTDLP_COOKIES_FILE %s not found; continuing without cookies.", path)
+        return None
+    if os.access(path, os.W_OK):
+        return path
+    copy = os.path.join(tempfile.gettempdir(), "ragastream-yt-cookies.txt")
+    shutil.copyfile(path, copy)
+    return copy
+
+
+YTDLP_COOKIES_FILE = _usable_cookie_file(os.environ.get("YTDLP_COOKIES_FILE"))
+
+# Optional JSON for yt-dlp's extractor_args, e.g. '{"youtube": {"player_client": ["tv", "web_safari"]}}',
+# to try other YouTube clients from a server without a code change.
+try:
+    YTDLP_EXTRACTOR_ARGS = json.loads(os.environ.get("YTDLP_EXTRACTOR_ARGS") or "null")
+except ValueError:
+    logging.getLogger(__name__).warning("YTDLP_EXTRACTOR_ARGS is not valid JSON; ignoring it.")
+    YTDLP_EXTRACTOR_ARGS = None
+
+
+def _count_youtube_cookies(path: Optional[str]) -> int:
+    if not path:
+        return 0
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            return sum(1 for line in f if "youtube.com" in line and not line.startswith("#"))
+    except OSError:
+        return 0
+
+
+logging.getLogger(__name__).info(
+    "yt-dlp %s | node: %s | youtube cookies loaded: %d",
+    getattr(getattr(yt_dlp, "version", None), "__version__", "?"),
+    "yes" if shutil.which("node") else "NOT FOUND (streams will fail)",
+    _count_youtube_cookies(YTDLP_COOKIES_FILE),
+)
+
+
+class _YtdlpLog:
+    """Sends yt-dlp's warnings and errors to our log (they used to be silenced),
+    so a server-side failure says why: bot check, cookies, or something else."""
+
+    def debug(self, msg: str) -> None:  # yt-dlp routes info to debug too: too chatty
+        pass
+
+    def info(self, msg: str) -> None:
+        pass
+
+    def warning(self, msg: str) -> None:
+        logging.getLogger("yt-dlp").warning("%s", msg[:400])
+
+    def error(self, msg: str) -> None:
+        logging.getLogger("yt-dlp").error("%s", msg[:400])
 
 # ---------------------------------------------------------------------------
 # In-memory stream-URL cache
@@ -106,12 +171,14 @@ _search_inflight: Dict[str, "asyncio.Future[list]"] = {}
 def _ydl_opts_base() -> dict:
     opts: dict = {
         "quiet": True,
-        "no_warnings": True,
+        "logger": _YtdlpLog(),
         "extract_flat": False,
         "skip_download": True,
         # Node.js solves YouTube's signature/nsig challenges (yt-dlp-ejs).
         "js_runtimes": {"node": {}},
     }
+    if YTDLP_EXTRACTOR_ARGS:
+        opts["extractor_args"] = YTDLP_EXTRACTOR_ARGS
     if YTDLP_COOKIES_FILE:
         opts["cookiefile"] = YTDLP_COOKIES_FILE
     elif YTDLP_COOKIES_FROM_BROWSER:
