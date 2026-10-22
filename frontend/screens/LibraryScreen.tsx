@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Dimensions, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
@@ -355,6 +355,7 @@ export default function LibraryScreen({ navigation }: Props) {
       <View style={styles.header}>
         <Text variant="display" style={{ flex: 1 }}>Library</Text>
         <IconButton icon="search" onPress={() => setIsSearching((v) => !v)} accessibilityLabel="Search your library" />
+        <IconButton icon="download-outline" onPress={() => root?.navigate('Import')} accessibilityLabel="Import a playlist" />
         <IconButton icon="add" variant="tonal" onPress={() => setIsCreateVisible(true)} accessibilityLabel="Create playlist" iconSize={26} />
       </View>
 
@@ -396,7 +397,10 @@ export default function LibraryScreen({ navigation }: Props) {
             ) : filter === 'channels' ? (
               <EmptyState icon="person-circle-outline" title="No channels yet" body="Like a few songs and the channels behind them will gather here." compact />
             ) : (
-              <EmptyState icon="albums-outline" title="Make your first playlist" body="Collect the songs you love for a drive, a mood, or a morning." actionLabel="Create playlist" onAction={() => setIsCreateVisible(true)} />
+              <View style={{ alignItems: 'center' }}>
+                <EmptyState icon="albums-outline" title="Make your first playlist" body="Collect the songs you love for a drive, a mood, or a morning." actionLabel="Create playlist" onAction={() => setIsCreateVisible(true)} />
+                <Button label="Import a playlist" variant="ghost" icon="download-outline" onPress={() => root?.navigate('Import')} />
+              </View>
             )
           }
         />
@@ -478,7 +482,7 @@ const useStyles = makeStyles((t) => ({
   tileArt: { left: 0, position: 'absolute', right: 0 },
   scrim: { bottom: 0, height: '75%', left: 0, position: 'absolute', right: 0 },
   tileText: { bottom: Space[3], gap: 1, left: Space[3], position: 'absolute', right: Space[3] },
-  fill: { ...StyleSheet.absoluteFillObject },
+  fill: { ...StyleSheet.absoluteFill },
   likedText: { flex: 1, justifyContent: 'space-between', padding: Space[4] },
   nameInput: {
     ...Type.headline,

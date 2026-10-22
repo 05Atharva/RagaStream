@@ -17,10 +17,14 @@ import { queryClient } from './queryClient';
 import { ensureSongInCatalogue } from './songService';
 import { recordPlayHistory } from './historyService';
 import * as engine from './audioPlayer';
+import * as recs from './recsService';
+import { flushEvents, logEvent, logSongEvent } from './eventLog';
+import { hideSong } from './libraryActions';
 import {
   usePlayerStore,
   type PlaybackContext,
   type RepeatModeValue,
+  type Surface,
   type Track,
 } from '../store/playerStore';
 import { useSettingsStore } from '../store/settingsStore';
@@ -32,6 +36,11 @@ export type SongInput = {
   channel_name?: string | null;
   thumbnail_url?: string | null;
   duration_sec?: number | null;
+  /** Set when a /recs call produced the song: its slate, the reason to show, where it was served. */
+  recId?: string | null;
+  reason?: string | null;
+  reasonCode?: string | null;
+  surface?: Surface;
 };
 
 /** Shape returned by /youtube/search and /youtube/radio. */
@@ -49,6 +58,21 @@ const set = usePlayerStore.setState;
 const PREVIOUS_RESTART_THRESHOLD_SEC = 3;
 const SMART_SHUFFLE_EVERY = 3;
 const MAX_SKIP_ATTEMPTS = 3;
+const COMPLETE_RATIO = 0.8; // listened this much = a complete, not a skip
+const QUICK_SKIP_RATIO = 0.5; // a skip before this counts against the recommendation
+const STEER_GUARD_MS = 60_000;
+const RECS_ID_CAP = 200;
+
+/** Where a song came from, by the context it was played in. */
+const CONTEXT_SURFACE: Record<PlaybackContext['type'], Surface> = {
+  playlist: 'playlist',
+  liked: 'liked',
+  search: 'search',
+  channel: 'channel',
+  home: 'home',
+  radio: 'radio',
+  queue: 'queue',
+};
 
 // ── Conversions ───────────────────────────────────────────────────────────────
 
@@ -86,6 +110,9 @@ export function songToTrack(song: SongInput, album = 'RagaStream'): Track {
     thumbnailUrl: thumbnail,
     durationSec: song.duration_sec || undefined,
     queueId: nextQueueId(),
+    surface: song.surface,
+    recId: song.recId || undefined,
+    reason: song.reason || undefined,
   };
 }
 
@@ -98,6 +125,9 @@ export function trackToSong(track: Track): SongInput {
     channel_name: track.channelName || track.channel_name || track.artist,
     thumbnail_url: track.thumbnailUrl || track.thumbnail_url || track.artwork,
     duration_sec: track.durationSec ?? null,
+    recId: track.recId,
+    reason: track.reason,
+    surface: track.surface,
   };
 }
 
@@ -166,8 +196,157 @@ export async function fetchRadio(youtubeId: string, limit = 25): Promise<SongInp
   const { data } = await apiClient.get<YouTubeResult[]>('/youtube/radio', {
     params: { id: youtubeId, limit },
   });
-  const hidden = new Set(useSettingsStore.getState().hiddenYoutubeIds);
-  return data.filter((r) => !hidden.has(r.youtube_id)).map(fromYouTube);
+  return data.filter((r) => !recs.isHiddenLocally(r.youtube_id, r.channel)).map(fromYouTube);
+}
+
+/** Radio from the recommendation engine; falls back to YouTube's own radio on any error. */
+async function radioSongs(youtubeId: string, limit: number): Promise<SongInput[]> {
+  try {
+    const songs = recs.slateSongs(await recs.fetchRadioSlate(youtubeId, limit));
+    if (songs.length > 0) return songs;
+  } catch {
+    // fall through to YouTube radio
+  }
+  return fetchRadio(youtubeId, limit);
+}
+
+/** Every youtube_id queued or played in this session, newest last (for `exclude`). */
+function queuedIds(): string[] {
+  const { queue, userQueue } = get();
+  return [...new Set([...queue, ...userQueue].map(getYoutubeId))].slice(-RECS_ID_CAP);
+}
+
+// ── Listening events ──────────────────────────────────────────────────────────
+// start when a track really begins; skip or complete when it is left; complete
+// when the engine reports the end. previous() restarting the same track is none of these.
+
+type Listen = { track: Track; maxPos: number };
+let listen: Listen | null = null;
+let recSkipStreak = 0;
+let lastSteerAt = -Infinity;
+
+function emitListen(event: 'start' | 'skip' | 'complete', track: Track, listenedSec?: number, durationSec?: number) {
+  const youtubeId = getYoutubeId(track);
+  logEvent({
+    youtube_id: youtubeId,
+    event,
+    surface: track.surface,
+    context_id: get().context?.id,
+    rec_id: track.recId,
+    song_id: track.id !== youtubeId ? track.id : undefined,
+    listened_sec: listenedSec === undefined ? undefined : Math.round(listenedSec * 10) / 10,
+    duration_sec: durationSec || undefined,
+  });
+}
+
+function beginListen(track: Track) {
+  listen = { track, maxPos: 0 };
+  emitListen('start', track, undefined, track.durationSec ?? get().duration);
+}
+
+/** The listener moved on: a skip, or a complete if they heard at least 80%. */
+function closeListen() {
+  const l = listen;
+  if (!l) return;
+  listen = null;
+  const state = get();
+  const same = state.currentTrack?.queueId === l.track.queueId;
+  const listened = Math.max(l.maxPos, same ? state.currentPosition : 0);
+  const duration = l.track.durationSec || (same ? state.duration : 0) || 0;
+  const ratio = listened / (duration > 0 ? duration : 180);
+  const done = ratio >= COMPLETE_RATIO;
+  emitListen(done ? 'complete' : 'skip', l.track, listened, duration);
+  noteOutcome(l.track, !done, ratio);
+}
+
+/** The engine reported the end of the track on its own. */
+function completeListen() {
+  const l = listen;
+  if (!l) return;
+  listen = null;
+  const duration = l.track.durationSec || get().duration || 0;
+  emitListen('complete', l.track, Math.max(l.maxPos, duration), duration);
+  recSkipStreak = 0;
+}
+
+usePlayerStore.subscribe((state) => {
+  if (!listen || state.currentTrack?.queueId !== listen.track.queueId) return;
+  const limit = listen.track.durationSec || state.duration;
+  if (limit > 0 && state.currentPosition > limit + 1) return; // stale progress from another track
+  if (state.currentPosition > listen.maxPos) listen.maxPos = state.currentPosition;
+});
+
+// ── Steering ──────────────────────────────────────────────────────────────────
+
+/** Two quick skips in a row of recommended tracks mean the picks are off: re-pick. */
+function noteOutcome(track: Track, skipped: boolean, ratio: number) {
+  const isPick = Boolean(track.isAutoplay || track.isRecommendation);
+  recSkipStreak = isPick && skipped && ratio < QUICK_SKIP_RATIO ? recSkipStreak + 1 : 0;
+  if (recSkipStreak >= 2) void steerQueue();
+}
+
+/** Unplayed picks after the current track: Autoplay always, Smart Shuffle only in smart mode. */
+function replaceablePicks(state: ReturnType<typeof get>) {
+  const upcoming = state.queue.slice(state.currentIndex + 1);
+  return {
+    autoplay: upcoming.filter((t) => t.isAutoplay),
+    smart: state.shuffleMode === 'smart' ? upcoming.filter((t) => t.isRecommendation) : [],
+  };
+}
+
+async function steerQueue(): Promise<void> {
+  const before = replaceablePicks(get());
+  if (before.autoplay.length + before.smart.length === 0) return;
+  if (Date.now() - lastSteerAt < STEER_GUARD_MS) return;
+  lastSteerAt = Date.now();
+  recSkipStreak = 0;
+
+  try {
+    // The backend reads the session from the skip events, so send them first.
+    await flushEvents().catch(() => {});
+    const seed = get().currentTrack;
+    if (!seed) return;
+    const taken = new Set(queuedIds());
+    const songs = recs
+      .slateSongs(await recs.fetchNext(getYoutubeId(seed), [...taken]))
+      .filter((s) => !taken.has(s.youtube_id));
+    if (songs.length === 0) return;
+
+    const latest = get();
+    const picks = replaceablePicks(latest);
+    if (picks.autoplay.length + picks.smart.length === 0) return;
+    const smartTracks = songs
+      .slice(0, picks.smart.length)
+      .map((song) => ({ ...songToTrack(song, 'Smart Shuffle'), isRecommendation: true, surface: 'smart_shuffle' as Surface }));
+    const autoTracks = songs
+      .slice(smartTracks.length, smartTracks.length + picks.autoplay.length)
+      .map((song) => ({ ...songToTrack(song, 'Autoplay'), isAutoplay: true, surface: 'autoplay' as Surface }));
+
+    const drop = new Set(picks.autoplay.map((t) => t.queueId));
+    const smartSlots = new Set(picks.smart.map((t) => t.queueId));
+    const fresh = [...smartTracks];
+    const played = latest.queue.slice(0, latest.currentIndex + 1);
+    const upcoming: Track[] = [];
+    latest.queue.slice(latest.currentIndex + 1).forEach((t) => {
+      if (drop.has(t.queueId)) return;
+      if (smartSlots.has(t.queueId)) {
+        const replacement = fresh.shift();
+        if (replacement) upcoming.push(replacement);
+        return;
+      }
+      upcoming.push(t);
+    });
+    set({
+      queue: [...played, ...upcoming, ...autoTracks],
+      originalQueue: latest.originalQueue
+        ? [...latest.originalQueue.filter((t) => !drop.has(t.queueId)), ...autoTracks]
+        : null,
+    });
+    prefetchUpcoming();
+    Toast.show({ type: 'info', text1: 'Tuning your queue' });
+  } catch {
+    // keep the current picks
+  }
 }
 
 // ── Track lifecycle ───────────────────────────────────────────────────────────
@@ -211,6 +390,7 @@ let playToken = 0;
 
 async function startTrack(track: Track, index: number, fromUserQueue = false, startPosition = 0) {
   const token = ++playToken;
+  closeListen();
   beginTrackWatch();
   set({
     currentTrack: track,
@@ -236,6 +416,7 @@ async function startTrack(track: Track, index: number, fromUserQueue = false, st
     await engine.loadAndPlay({ ...track, url: freshUrl }, startPosition);
   }
   if (token !== playToken) return;
+  beginListen(track);
   void onTrackStarted(track);
   prefetchUpcoming();
   void maybeExtendWithAutoplay();
@@ -273,7 +454,10 @@ export async function playSongs(
   options: PlayOptions = {}
 ): Promise<void> {
   if (songs.length === 0) return;
-  const tracks = songs.map((song) => songToTrack(song, context.name));
+  const tracks = songs.map((song) => ({
+    ...songToTrack(song, context.name),
+    surface: song.surface ?? CONTEXT_SURFACE[context.type],
+  }));
   const start = Math.min(Math.max(startIndex, 0), tracks.length - 1);
   const previousMode = get().shuffleMode;
   const shuffleOn = options.shuffle ?? previousMode !== 'off';
@@ -314,8 +498,8 @@ export async function playSongs(
 
 /** Song radio: the song followed by related tracks. `name` overrides "<title> Radio" (e.g. mixes). */
 export async function startRadio(song: SongInput, name?: string): Promise<void> {
-  const related = await fetchRadio(song.youtube_id, 30);
-  await playSongs([song, ...related], 0, {
+  const related = await radioSongs(song.youtube_id, 30);
+  await playSongs([{ ...song, surface: 'radio' as const }, ...related.map((r) => ({ ...r, surface: 'radio' as const }))], 0, {
     type: 'radio',
     name: name ?? `${song.title} Radio`,
     id: song.youtube_id,
@@ -363,6 +547,7 @@ export async function next({ auto = false }: { auto?: boolean } = {}): Promise<v
   if (auto && state.repeatMode === 'one') {
     await engine.seekTo(0);
     await engine.resumePlayback();
+    beginListen(state.currentTrack);
     void onTrackStarted(state.currentTrack);
     return;
   }
@@ -431,6 +616,43 @@ export async function stop(): Promise<void> {
   await engine.stopPlayback();
 }
 
+/**
+ * Sign-out: stop the music and forget everything about the session. Silent
+ * (no listening event is logged for the track that was playing: the listener
+ * didn't choose to leave it, and the account is gone).
+ */
+export async function resetPlayback(): Promise<void> {
+  playToken += 1; // any startTrack still resolving a URL gives up
+  autoplayEpoch += 1;
+  autoplayInflight = null;
+  listen = null;
+  recSkipStreak = 0;
+  recovering = false;
+  setIntent(false);
+  cancelSleepTimer();
+  streamCache.clear();
+  streamInflight.clear();
+  set({
+    currentTrack: null,
+    queue: [],
+    userQueue: [],
+    currentIndex: -1,
+    playingFromUserQueue: false,
+    context: null,
+    originalQueue: null,
+    isPlaying: false,
+    isLoading: false,
+    currentPosition: 0,
+    duration: 0,
+    showReconnecting: false,
+  });
+  try {
+    await engine.stopPlayback();
+  } catch {
+    // nothing loaded, or the player is already gone
+  }
+}
+
 /** Jump straight to an entry in the queue sheet. */
 export async function playQueueItem(queueId: string): Promise<void> {
   const state = get();
@@ -449,7 +671,8 @@ export async function playQueueItem(queueId: string): Promise<void> {
 
 /** Spotify "Add to queue": appended to "Next in queue". */
 export async function addToQueue(song: SongInput): Promise<void> {
-  const track = songToTrack(song, 'Queue');
+  logSongEvent('queue', song);
+  const track = { ...songToTrack(song, 'Queue'), surface: 'queue' as const };
   if (!get().currentTrack) {
     await playSongs([song], 0, { type: 'queue', name: 'Queue' });
     return;
@@ -460,7 +683,8 @@ export async function addToQueue(song: SongInput): Promise<void> {
 
 /** "Play next": jumps to the front of "Next in queue". */
 export async function playNext(song: SongInput): Promise<void> {
-  const track = songToTrack(song, 'Queue');
+  logSongEvent('queue', song);
+  const track = { ...songToTrack(song, 'Queue'), surface: 'queue' as const };
   if (!get().currentTrack) {
     await playSongs([song], 0, { type: 'queue', name: 'Queue' });
     return;
@@ -536,32 +760,47 @@ export async function cycleShuffle(): Promise<void> {
   set({ shuffleMode: 'off', originalQueue: null, queue, currentIndex: index });
 }
 
-async function addSmartRecommendations() {
-  const state = get();
+/** Smart Shuffle candidates from the engine; falls back to YouTube radio around a few seeds. */
+async function smartPool(state: ReturnType<typeof get>): Promise<SongInput[]> {
   const contextTracks = state.queue.filter((t) => !t.isRecommendation);
+  try {
+    const slate = await recs.fetchShuffle({
+      current: state.currentTrack ? getYoutubeId(state.currentTrack) : null,
+      context: contextTracks.map(getYoutubeId),
+      exclude: queuedIds(),
+      limit: 15,
+    });
+    const songs = recs.slateSongs(slate);
+    if (songs.length > 0) return songs;
+  } catch {
+    // fall through to YouTube radio
+  }
   const seeds = [state.currentTrack, ...shuffleArray(contextTracks).slice(0, 2)]
     .filter((t): t is Track => Boolean(t))
     .map(getYoutubeId);
   const uniqueSeeds = [...new Set(seeds)].slice(0, 3);
-
   const results = await Promise.allSettled(uniqueSeeds.map((id) => fetchRadio(id, 12)));
+  const songs: SongInput[] = [];
+  for (const result of results) if (result.status === 'fulfilled') songs.push(...result.value);
+  return shuffleArray(songs);
+}
+
+async function addSmartRecommendations() {
+  const pool = await smartPool(get());
   const latest = get();
   if (latest.shuffleMode !== 'smart') return;
 
   const present = new Set(latest.queue.map(getYoutubeId));
   const picks: Track[] = [];
-  for (const result of results) {
-    if (result.status !== 'fulfilled') continue;
-    for (const song of result.value) {
-      if (present.has(song.youtube_id)) continue;
-      present.add(song.youtube_id);
-      picks.push({ ...songToTrack(song, 'Smart Shuffle'), isRecommendation: true });
-    }
+  for (const song of pool) {
+    if (present.has(song.youtube_id)) continue;
+    present.add(song.youtube_id);
+    picks.push({ ...songToTrack(song, 'Smart Shuffle'), isRecommendation: true, surface: 'smart_shuffle' });
   }
 
   const upcoming = latest.queue.slice(latest.currentIndex + 1);
   const wanted = Math.min(Math.ceil(upcoming.length / SMART_SHUFFLE_EVERY) || 3, 15);
-  const recommendations = shuffleArray(picks).slice(0, wanted);
+  const recommendations = picks.slice(0, wanted);
   if (recommendations.length === 0) return;
 
   const mixed: Track[] = [];
@@ -577,12 +816,14 @@ async function addSmartRecommendations() {
 /** Remove a Smart Shuffle / Autoplay pick and stop recommending it. */
 export function removeRecommendation(track: Track) {
   if (track.queueId) removeFromQueue(track.queueId);
-  useSettingsStore.getState().hideSong(getYoutubeId(track));
+  void hideSong({ youtube_id: getYoutubeId(track), title: track.title });
 }
 
 // ── Autoplay ──────────────────────────────────────────────────────────────────
 
 let autoplayInflight: Promise<boolean> | null = null;
+/** Bumped by resetPlayback() so an autoplay fetch that was in flight drops its result. */
+let autoplayEpoch = 0;
 
 /**
  * When the last context track is playing (or `force`), append related songs so
@@ -597,12 +838,27 @@ async function maybeExtendWithAutoplay(force = false): Promise<boolean> {
   const seed = state.queue[state.queue.length - 1] ?? state.currentTrack;
   if (!seed) return false;
 
+  const epoch = autoplayEpoch;
   autoplayInflight = (async () => {
     try {
       const recent = new Set(get().queue.map(getYoutubeId));
-      const songs = (await fetchRadio(getYoutubeId(seed), 20)).filter((s) => !recent.has(s.youtube_id));
-      if (songs.length === 0) return false;
-      const tracks = songs.map((song) => ({ ...songToTrack(song, 'Autoplay'), isAutoplay: true }));
+      let songs: SongInput[] = [];
+      try {
+        songs = recs
+          .slateSongs(await recs.fetchNext(getYoutubeId(seed), queuedIds()))
+          .filter((s) => !recent.has(s.youtube_id));
+      } catch {
+        // fall through to YouTube radio
+      }
+      if (songs.length === 0) {
+        songs = (await fetchRadio(getYoutubeId(seed), 20)).filter((s) => !recent.has(s.youtube_id));
+      }
+      if (songs.length === 0 || epoch !== autoplayEpoch) return false;
+      const tracks = songs.map((song) => ({
+        ...songToTrack(song, 'Autoplay'),
+        isAutoplay: true,
+        surface: 'autoplay' as Surface,
+      }));
       set((s) => ({
         queue: [...s.queue, ...tracks],
         originalQueue: s.originalQueue ? [...s.originalQueue, ...tracks] : null,
@@ -612,7 +868,7 @@ async function maybeExtendWithAutoplay(force = false): Promise<boolean> {
     } catch {
       return false;
     } finally {
-      autoplayInflight = null;
+      if (epoch === autoplayEpoch) autoplayInflight = null;
     }
   })();
   return autoplayInflight;
@@ -670,6 +926,7 @@ async function recoverFromError() {
   // A second failure right after recovering means the track itself is broken.
   if (Date.now() - lastRecoveryAt < 15_000) {
     Toast.show({ type: 'error', text1: 'Could not reconnect', text2: 'Skipping to the next track.' });
+    listen = null; // a broken stream says nothing about taste
     await next({ auto: true });
     return;
   }
@@ -735,6 +992,12 @@ const watchdog = setInterval(() => {
 (watchdog as unknown as { unref?: () => void }).unref?.();
 
 engine.setEngineHandlers({
-  onEnded: () => void next({ auto: true }),
+  onEnded: () => {
+    completeListen();
+    void next({ auto: true });
+  },
   onError: () => void recoverFromError(),
+  // Lock screen, headphones or a call paused/resumed us: follow it, so the stall
+  // watchdog doesn't mistake a deliberate pause for a stuck stream and restart.
+  onExternalPlayChange: (playing) => setIntent(playing),
 });

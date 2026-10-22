@@ -45,9 +45,12 @@ const CACHE_VERSION = '1';
 const STORAGE_KEY = 'ragastream-query-cache';
 
 /** Query families worth saving: your library and slow, stable lookups. */
-const SAVED = new Set(['liked', 'playlists', 'playlist', 'history', 'songs', 'lyrics', 'artwork-color', 'genre-home']);
+// 'me-access' is saved so an approved user opens straight into the app while the
+// server wakes up (Render's free plan sleeps); it is re-checked on every launch and
+// the backend enforces approval on every request regardless.
+const SAVED = new Set(['liked', 'playlists', 'playlist', 'history', 'songs', 'lyrics', 'artwork-color', 'genre-home', 'recs-home', 'feedback', 'me-access']);
 /** Kept when the saved cache grows too big: what makes the app open full. */
-const ESSENTIAL = new Set(['liked', 'playlists', 'playlist', 'history']);
+const ESSENTIAL = new Set(['liked', 'playlists', 'playlist', 'history', 'me-access']);
 
 // Android's AsyncStorage can't read back a single value much over 2MB, so stay
 // well under it: drop the nice-to-haves (lyrics, colours, genre lists) first.

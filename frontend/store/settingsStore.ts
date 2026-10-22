@@ -29,11 +29,17 @@ type SettingsStore = {
   // Riyaz milestones already celebrated (ids), and whether existing ones were seeded silently
   achievedMilestones: string[];
   milestonesSeeded: boolean;
+  // Accounts (user ids) that have already seen the welcome, so a second account on the phone still gets it
+  welcomedUserIds: string[];
   // Playback
   autoplay: boolean;
   privateSession: boolean;
   playbackRate: number;
   hiddenYoutubeIds: string[];
+  // Local mirror of /feedback channel hides (exact channel names).
+  hiddenChannels: string[];
+  // true once the local hides above have been uploaded to /feedback
+  feedbackSynced: boolean;
   // Search
   recentSearches: RecentSearch[];
   // Library
@@ -44,11 +50,15 @@ type SettingsStore = {
 
   setThemePreference: (value: ThemePreference) => void;
   markMilestones: (ids: string[], seeded?: boolean) => void;
+  markWelcomed: (userId: string) => void;
   setAutoplay: (value: boolean) => void;
   setPrivateSession: (value: boolean) => void;
   setPlaybackRate: (rate: number) => void;
   hideSong: (youtubeId: string) => void;
   unhideSong: (youtubeId: string) => void;
+  hideChannel: (channelName: string) => void;
+  unhideChannel: (channelName: string) => void;
+  setFeedbackSynced: (value: boolean) => void;
   addRecentSearch: (query: string) => void;
   removeRecentSearch: (query: string) => void;
   clearRecentSearches: () => void;
@@ -64,10 +74,13 @@ export const useSettingsStore = create<SettingsStore>()(
       themePreference: 'system',
       achievedMilestones: [],
       milestonesSeeded: false,
+      welcomedUserIds: [],
       autoplay: true,
       privateSession: false,
       playbackRate: 1,
       hiddenYoutubeIds: [],
+      hiddenChannels: [],
+      feedbackSynced: false,
       recentSearches: [],
       librarySort: 'recents',
       libraryView: 'list',
@@ -79,6 +92,10 @@ export const useSettingsStore = create<SettingsStore>()(
         set((state) => ({
           achievedMilestones: [...new Set([...state.achievedMilestones, ...ids])],
           milestonesSeeded: seeded ?? state.milestonesSeeded,
+        })),
+      markWelcomed: (userId) =>
+        set((state) => ({
+          welcomedUserIds: state.welcomedUserIds.includes(userId) ? state.welcomedUserIds : [...state.welcomedUserIds, userId],
         })),
       setAutoplay: (autoplay) => set({ autoplay }),
       setPrivateSession: (privateSession) => set({ privateSession }),
@@ -93,6 +110,17 @@ export const useSettingsStore = create<SettingsStore>()(
         set((state) => ({
           hiddenYoutubeIds: state.hiddenYoutubeIds.filter((id) => id !== youtubeId),
         })),
+      hideChannel: (channelName) =>
+        set((state) => ({
+          hiddenChannels: state.hiddenChannels.includes(channelName)
+            ? state.hiddenChannels
+            : [...state.hiddenChannels, channelName],
+        })),
+      unhideChannel: (channelName) =>
+        set((state) => ({
+          hiddenChannels: state.hiddenChannels.filter((c) => c !== channelName),
+        })),
+      setFeedbackSynced: (feedbackSynced) => set({ feedbackSynced }),
       addRecentSearch: (query) => {
         const trimmed = query.trim();
         if (trimmed.length < 2) return;

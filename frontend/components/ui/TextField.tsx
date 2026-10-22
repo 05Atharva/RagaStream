@@ -12,6 +12,8 @@ type TextFieldProps = TextInputProps & {
   error?: string | null;
   /** Adds a show/hide toggle and hides the text by default. */
   secure?: boolean;
+  /** A taller, top-aligned box for pasting lists (pair with `multiline`). */
+  tall?: boolean;
 };
 
 /**
@@ -19,7 +21,7 @@ type TextFieldProps = TextInputProps & {
  * active field is obvious at a glance; errors sit directly under the field.
  */
 const TextField = forwardRef<TextInput, TextFieldProps>(function TextField(
-  { label, icon, error, secure = false, onFocus, onBlur, style, ...rest },
+  { label, icon, error, secure = false, tall = false, onFocus, onBlur, style, ...rest },
   ref
 ) {
   const colors = useColors();
@@ -41,19 +43,19 @@ const TextField = forwardRef<TextInput, TextFieldProps>(function TextField(
       <Animated.View
         style={[
           {
-            alignItems: 'center',
+            alignItems: tall ? 'flex-start' : 'center',
             backgroundColor: colors.surface,
             borderRadius: Radius.md,
             borderWidth: 1.5,
             flexDirection: 'row',
             gap: Space[3],
-            height: 54,
+            ...(tall ? { minHeight: 168, paddingTop: Space[4] } : { height: 54 }),
             paddingHorizontal: Space[4],
           },
           borderStyle,
         ]}
       >
-        <Ionicons name={icon} size={19} color={colors.textTertiary} />
+        <Ionicons name={icon} size={19} color={colors.textTertiary} style={tall ? { marginTop: 1 } : undefined} />
         <TextInput
           ref={ref}
           placeholderTextColor={colors.textTertiary}
@@ -67,7 +69,7 @@ const TextField = forwardRef<TextInput, TextFieldProps>(function TextField(
             onBlur?.(e);
           }}
           accessibilityLabel={label}
-          style={[Type.bodyStrong, { color: colors.text, flex: 1, height: '100%' }, style]}
+          style={[Type.bodyStrong, { color: colors.text, flex: 1, height: tall ? undefined : '100%', minHeight: tall ? 128 : undefined, textAlignVertical: tall ? 'top' : undefined }, style]}
           {...rest}
         />
         {secure ? (

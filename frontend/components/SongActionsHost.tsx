@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import type { View } from 'react-native';
 import Toast from '../services/toast';
 import SongOptionsSheet, { type SongAction } from './SongOptionsSheet';
@@ -6,11 +6,12 @@ import SaveToSheet from './SaveToSheet';
 import { useSongMenuStore } from '../store/songMenuStore';
 import { useIsLiked } from '../hooks/useLiked';
 import { usePlayerStore } from '../store/playerStore';
-import { useSettingsStore } from '../store/settingsStore';
 import { navigate } from '../navigation/navigationRef';
 import * as playback from '../services/playbackController';
 import {
   ensureSongId,
+  hideChannel,
+  hideSong,
   invalidatePlaylists,
   removeSongFromPlaylist,
   setLiked,
@@ -160,10 +161,22 @@ export default function SongActionsHost() {
       label: 'Hide from radio & autoplay',
       icon: 'eye-off-outline',
       onPress: run(() => {
-        useSettingsStore.getState().hideSong(song.youtube_id);
+        void hideSong(song);
         Toast.show({ type: 'info', text1: "We won't recommend this song" });
       }),
     });
+    const channelName = song.channel_name;
+    if (channelName) {
+      actions.push({
+        key: 'hide-channel',
+        label: `Don't recommend ${channelName}`,
+        icon: 'person-remove-outline',
+        onPress: run(() => {
+          void hideChannel(channelName);
+          Toast.show({ type: 'info', text1: `We won't recommend ${channelName}` });
+        }),
+      });
+    }
   }
 
   return (

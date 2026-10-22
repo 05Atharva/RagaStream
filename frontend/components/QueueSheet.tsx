@@ -210,7 +210,9 @@ function QueueRow({
         <View style={styles.subtitleRow}>
           {track.isRecommendation ? <Ionicons name="sparkles" size={12} color={colors.signal} /> : null}
           <Text variant="caption" color="textSecondary" numberOfLines={1} style={{ flexShrink: 1 }}>
-            {track.isRecommendation ? `Smart Shuffle · ${channel}` : channel}
+            {(track.isRecommendation || track.isAutoplay) && track.reason
+              ? track.reason
+              : track.isRecommendation ? `Smart Shuffle · ${channel}` : channel}
           </Text>
         </View>
       </View>

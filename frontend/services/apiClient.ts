@@ -1,10 +1,15 @@
 import axios from 'axios';
+import { isAccessDenied } from './accessGate';
+import { queryClient } from './queryClient';
 import { supabase } from './supabase';
 
 const baseURL = process.env.EXPO_PUBLIC_API_URL;
 
 export const apiClient = axios.create({
   baseURL,
+  // Long enough for a sleeping free-tier server to wake (~1 min), short enough
+  // that a dead connection doesn't hang a screen forever.
+  timeout: 75_000,
 });
 
 // ── Request: attach Supabase Bearer token ─────────────────────────────────────
@@ -41,6 +46,11 @@ apiClient.interceptors.response.use(
       } catch {
         // ignore — session already gone
       }
+    }
+    // 403 access_pending / access_rejected: the owner has not approved this
+    // account (or just changed their mind). Re-ask so the gate re-routes.
+    if (isAccessDenied(error)) {
+      void queryClient.invalidateQueries({ queryKey: ['me-access'] });
     }
     return Promise.reject(error);
   }

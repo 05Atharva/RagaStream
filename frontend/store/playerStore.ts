@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 
+/** Where a song was played or acted on from (the recommendation engine's `surface`). */
+export type Surface =
+  | 'autoplay' | 'radio' | 'smart_shuffle' | 'home' | 'playlist_recs' | 'search'
+  | 'library' | 'playlist' | 'liked' | 'channel' | 'queue' | 'other';
+
 export type Track = {
   id: string;               // catalogue UUID once known, otherwise the YouTube ID
   title: string;
@@ -18,6 +23,9 @@ export type Track = {
   queueId?: string;         // unique per queue entry (the same song can appear twice)
   isRecommendation?: boolean; // added by Smart Shuffle
   isAutoplay?: boolean;       // appended by Autoplay when the context ran out
+  surface?: Surface;          // where this entry came from, for listening events
+  recId?: string;             // slate id when a /recs call produced it
+  reason?: string;            // "Because you played …", shown in the queue
 };
 
 export type RepeatModeValue = 'off' | 'one' | 'all';

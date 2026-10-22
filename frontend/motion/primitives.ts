@@ -48,9 +48,9 @@ export function usePressMotion(scaleTo: number = Motion.pressScale) {
 
 /**
  * Rise: content arrives from 14pt below while fading in, on the `out` curve.
- * `index` staggers siblings. Plays once per mount; reduced motion fades only.
+ * `index` staggers siblings; `startDelay` (ms) holds the whole group back, e.g. until a logo has drawn. Plays once per mount; reduced motion fades only.
  */
-export function useRise(index = 0, enabled = true) {
+export function useRise(index = 0, enabled = true, startDelay = 0) {
   const reduced = useReducedMotion();
   const progress = useSharedValue(enabled ? 0 : 1);
   const played = useRef(!enabled);
@@ -58,12 +58,12 @@ export function useRise(index = 0, enabled = true) {
   useEffect(() => {
     if (played.current) return;
     played.current = true;
-    const delay = Math.min(index, Motion.staggerMax) * Motion.stagger;
+    const delay = startDelay + Math.min(index, Motion.staggerMax) * Motion.stagger;
     progress.value = withDelay(
       delay,
       withTiming(1, { duration: reduced ? duration.quick : duration.glide, easing: easing.out })
     );
-  }, [index, progress, reduced]);
+  }, [index, progress, reduced, startDelay]);
 
   return useAnimatedStyle(() => ({
     opacity: progress.value,

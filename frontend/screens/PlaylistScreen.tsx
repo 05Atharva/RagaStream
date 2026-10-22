@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,6 +8,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import DraggableFlatList, { type RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import Toast from '../services/toast';
+import AddSongsSheet from '../components/AddSongsSheet';
 import AnimatedBottomSheet from '../components/AnimatedBottomSheet';
 import { confirmModal } from '../components/AppModal';
 import PlaylistCover from '../components/PlaylistCover';
@@ -20,6 +21,7 @@ import SheetRow from '../components/ui/SheetRow';
 import Text from '../components/ui/Text';
 import Rise from '../motion/Rise';
 import { apiClient } from '../services/apiClient';
+import * as recsApi from '../services/recsService';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import { usePlayerStore } from '../store/playerStore';
 import { useSettingsStore } from '../store/settingsStore';
@@ -74,6 +76,7 @@ export default function PlaylistScreen({ route, navigation }: Props) {
   const [query, setQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const [isAddOpen, setIsAddOpen] = useState(false);
   const [anchorY, setAnchorY] = useState(0);
   const [recsSeed, setRecsSeed] = useState(0);
 
@@ -82,6 +85,7 @@ export default function PlaylistScreen({ route, navigation }: Props) {
   const shuffleMode = usePlayerStore((s) => s.shuffleMode);
   const isPinned = useSettingsStore((s) => s.pinnedPlaylistIds.includes(playlistId));
   const hiddenIds = useSettingsStore((s) => s.hiddenYoutubeIds);
+  const hiddenChannels = useSettingsStore((s) => s.hiddenChannels);
 
   const playlistQuery = usePlaylist(playlistId);
   const playlist = playlistQuery.data;
@@ -106,10 +110,19 @@ export default function PlaylistScreen({ route, navigation }: Props) {
     return [...new Set(picks.map((s) => s.youtube_id))];
   }, [songs, recsSeed]);
   const recsQuery = useQuery({
-    queryKey: ['playlist-recs', playlistId, seedIds],
+    queryKey: ['playlist-recs', playlistId, seedIds, recsSeed],
     enabled: seedIds.length > 0,
     staleTime: 10 * 60 * 1000,
     queryFn: async () => {
+      // The engine first; YouTube radio around a couple of songs if it fails.
+      try {
+        const ids = songs.map((s) => s.youtube_id).slice(-200); // the API takes at most 200
+        const slate = await recsApi.fetchPlaylistRecs(ids, ids, 15);
+        const fromEngine = recsApi.slateSongs(slate).map((s) => ({ ...s, surface: 'playlist_recs' as const }));
+        if (fromEngine.length > 0) return fromEngine;
+      } catch {
+        // fall through to radio
+      }
       const results = await Promise.allSettled(seedIds.map((id) => playback.fetchRadio(id, 15)));
       const seen = new Set(songs.map((s) => s.youtube_id));
       const recs: playback.SongInput[] = [];
@@ -118,14 +131,17 @@ export default function PlaylistScreen({ route, navigation }: Props) {
         r.value.forEach((song) => {
           if (!seen.has(song.youtube_id)) {
             seen.add(song.youtube_id);
-            recs.push(song);
+            recs.push({ ...song, surface: 'playlist_recs' });
           }
         });
       });
       return recs;
     },
   });
-  const recommendations = (recsQuery.data ?? []).filter((r) => !hiddenIds.includes(r.youtube_id)).slice(0, 8);
+  const allRecommendations = (recsQuery.data ?? []).filter(
+    (r) => !hiddenIds.includes(r.youtube_id) && !(r.channel_name && hiddenChannels.includes(r.channel_name))
+  );
+  const recommendations = allRecommendations.slice(0, 8);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
@@ -224,7 +240,7 @@ export default function PlaylistScreen({ route, navigation }: Props) {
     setSort(order[(order.indexOf(sort) + 1) % order.length]);
   };
 
-  const goToSearch = () => navigation.navigate('Tabs', { screen: 'Search' });
+  const openAddSongs = () => setIsAddOpen(true);
   const startRename = () => {
     setNameDraft(playlist?.name ?? '');
     setIsEditingName(true);
@@ -282,7 +298,7 @@ export default function PlaylistScreen({ route, navigation }: Props) {
       ) : null}
 
       <View style={styles.actions} onLayout={(e) => setAnchorY(e.nativeEvent.layout.y)}>
-        <IconButton icon="add-circle-outline" onPress={goToSearch} accessibilityLabel="Add songs" iconSize={26} color={colors.textSecondary} />
+        <IconButton icon="add-circle-outline" onPress={openAddSongs} accessibilityLabel="Add songs" iconSize={26} color={colors.textSecondary} />
         {songs.length > 0 ? (
           <>
             <IconButton icon="search" onPress={() => setIsSearching(true)} accessibilityLabel="Find in this playlist" color={colors.textSecondary} />
@@ -332,7 +348,7 @@ export default function PlaylistScreen({ route, navigation }: Props) {
       )}
     </View>
   ) : (
-    <EmptyState icon="musical-notes-outline" title="Let's find something for this playlist" body="Search for songs and tap Add to playlist, or swipe them into place." actionLabel="Find songs" onAction={goToSearch} />
+    <EmptyState icon="musical-notes-outline" title="Let's find something for this playlist" body="Search for songs, or pick from your Liked Songs, without leaving this page." actionLabel="Add songs" onAction={openAddSongs} />
   );
 
   if (playlistQuery.isLoading) {
@@ -377,10 +393,19 @@ export default function PlaylistScreen({ route, navigation }: Props) {
               Toast.show({ type: 'success', text1: isPinned ? 'Unpinned' : 'Pinned to the top of your Library' });
             }}
           />
-          <SheetRow label="Add songs" icon="add-circle-outline" onPress={() => { setIsMenuVisible(false); goToSearch(); }} />
+          <SheetRow label="Add songs" icon="add-circle-outline" onPress={() => { setIsMenuVisible(false); openAddSongs(); }} />
           <SheetRow label="Delete playlist" icon="trash-outline" destructive onPress={handleDelete} />
         </View>
       </AnimatedBottomSheet>
+
+      <AddSongsSheet
+        isVisible={isAddOpen}
+        onClose={() => setIsAddOpen(false)}
+        playlistId={playlistId}
+        playlistName={playlist?.name ?? 'playlist'}
+        playlistSongs={songs}
+        suggested={{ songs: allRecommendations, isLoading: recsQuery.isLoading, isError: recsQuery.isError, refetch: () => void recsQuery.refetch() }}
+      />
     </View>
   );
 }

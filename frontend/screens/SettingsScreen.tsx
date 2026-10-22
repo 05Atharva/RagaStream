@@ -18,6 +18,10 @@ import Toggle from '../components/ui/Toggle';
 import Rise from '../motion/Rise';
 import { supabase } from '../services/supabase';
 import { clearQueryCache } from '../services/queryClient';
+import { clearAllFeedback } from '../services/libraryActions';
+import { useAccessRequests } from '../hooks/useAccessRequests';
+import { pendingCount } from '../services/accessRequests';
+import { countFeedback, useFeedback } from '../hooks/useFeedback';
 import { useAuthStore } from '../store/authStore';
 import { usePlayerStore } from '../store/playerStore';
 import { useSettingsStore, type ThemePreference } from '../store/settingsStore';
@@ -70,12 +74,24 @@ function Group({ title, children, index }: { title: string; children: React.Reac
 export default function SettingsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const styles = useStyles();
+  const colors = useColors();
   const [isSpeedVisible, setIsSpeedVisible] = useState(false);
   const [isSleepVisible, setIsSleepVisible] = useState(false);
   const themePreference = useSettingsStore((s) => s.themePreference);
   const autoplay = useSettingsStore((s) => s.autoplay);
   const privateSession = useSettingsStore((s) => s.privateSession);
-  const hiddenCount = useSettingsStore((s) => s.hiddenYoutubeIds.length);
+  const mirrorSongs = useSettingsStore((s) => s.hiddenYoutubeIds.length);
+  const mirrorChannels = useSettingsStore((s) => s.hiddenChannels.length);
+  const requests = useAccessRequests();
+  const waiting = requests.isOwner ? pendingCount(requests.data) : 0;
+  const feedback = useFeedback();
+  // The server list is the truth; until it loads, show what this phone remembers.
+  const counts = feedback.data ? countFeedback(feedback.data) : { songs: mirrorSongs, channels: mirrorChannels };
+  const hiddenCount = counts.songs + counts.channels;
+  const hiddenDetail = [
+    counts.songs ? `${counts.songs} ${counts.songs === 1 ? 'song' : 'songs'}` : '',
+    counts.channels ? `${counts.channels} ${counts.channels === 1 ? 'channel' : 'channels'}` : '',
+  ].filter(Boolean).join(' and ');
   const recentSearchCount = useSettingsStore((s) => s.recentSearches.length);
   const playbackRate = usePlayerStore((s) => s.playbackRate);
   const sleepLabel = useSleepTimerLabel();
@@ -118,12 +134,16 @@ export default function SettingsScreen() {
 
   const unhideAll = () =>
     confirmModal({
-      title: `Show ${hiddenCount} hidden songs again?`,
-      message: 'They can appear in radio, Autoplay and Smart Shuffle again.',
+      title: `Show ${hiddenDetail} again?`,
+      message: 'They can appear in radio, Autoplay, Smart Shuffle and Home again.',
       confirmLabel: 'Show again',
-      onConfirm: () => {
-        useSettingsStore.setState({ hiddenYoutubeIds: [] });
-        Toast.show({ type: 'success', text1: 'Hidden songs restored' });
+      onConfirm: async () => {
+        try {
+          await clearAllFeedback();
+          Toast.show({ type: 'success', text1: 'Hidden songs restored' });
+        } catch {
+          Toast.show({ type: 'error', text1: "Couldn't restore hidden songs", text2: 'Check your connection and try again.' });
+        }
       },
     });
 
@@ -146,6 +166,27 @@ export default function SettingsScreen() {
           </View>
           <Button label="Stats" icon="stats-chart" size="sm" variant="secondary" onPress={() => navigation.navigate('Stats')} />
         </Rise>
+
+        {requests.isOwner ? (
+          <Group title="Account" index={1}>
+            <Row
+              icon="person-add-outline"
+              label="Requests"
+              detail={waiting > 0 ? (waiting === 1 ? '1 person waiting' : `${waiting} people waiting`) : 'Approve or decline new accounts'}
+              onPress={() => navigation.navigate('Requests')}
+              right={
+                <View style={styles.trailing}>
+                  {waiting > 0 ? (
+                    <View style={styles.badge} accessibilityLabel={`${waiting} waiting`}>
+                      <Text variant="mono" color="accentInk">{String(waiting)}</Text>
+                    </View>
+                  ) : null}
+                  <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                </View>
+              }
+            />
+          </Group>
+        ) : null}
 
         <Group title="Appearance" index={1}>
           <View style={{ gap: Space[3], padding: Space[4] }}>
@@ -172,7 +213,7 @@ export default function SettingsScreen() {
         <Group title="Privacy & recommendations" index={3}>
           <Row icon="eye-off-outline" label="Private session" detail="Plays aren't saved to history, stats or Recently played"
             right={<Toggle value={privateSession} onChange={(v) => useSettingsStore.getState().setPrivateSession(v)} accessibilityLabel="Private session" />} />
-          <Row icon="remove-circle-outline" label="Hidden songs" detail={hiddenCount ? `${hiddenCount} kept out of radio and Autoplay` : 'None hidden'} onPress={hiddenCount ? unhideAll : undefined} />
+          <Row icon="remove-circle-outline" label="Hidden songs" detail={hiddenCount ? `${hiddenDetail} kept out of recommendations` : 'None hidden'} onPress={hiddenCount ? unhideAll : undefined} />
         </Group>
 
         <Group title="Storage" index={4}>
@@ -209,5 +250,7 @@ const useStyles = makeStyles((t) => ({
   group: { backgroundColor: t.colors.surface, borderRadius: Radius.lg, overflow: 'hidden', ...(t.isDark ? {} : Elevation.card) },
   row: { alignItems: 'center', flexDirection: 'row', gap: Space[3], minHeight: 60, paddingHorizontal: Space[4], paddingVertical: Space[3] },
   rowIcon: { alignItems: 'center', backgroundColor: t.colors.surfaceRaised, borderRadius: Radius.sm, height: 34, justifyContent: 'center', width: 34 },
+  trailing: { alignItems: 'center', flexDirection: 'row', gap: Space[2] },
+  badge: { alignItems: 'center', backgroundColor: t.colors.accentSoft, borderRadius: Radius.pill, justifyContent: 'center', minHeight: 24, minWidth: 24, paddingHorizontal: Space[2] },
   footer: { alignItems: 'center', gap: Space[2], paddingTop: Space[4] },
 }));

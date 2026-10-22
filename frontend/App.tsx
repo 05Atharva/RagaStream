@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
@@ -10,50 +10,27 @@ import {
 } from '@expo-google-fonts/bricolage-grotesque';
 import { Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold } from '@expo-google-fonts/geist';
 import { GeistMono_500Medium } from '@expo-google-fonts/geist-mono';
-import { NativeModules, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { clearQueryCache, persistOptions, queryClient } from './services/queryClient';
+import AccessGate from './components/AccessGate';
 import AppModal from './components/AppModal';
 import AuthGate from './components/AuthGate';
+import ImportWatcher from './components/import/ImportWatcher';
 import MilestoneHost from './components/MilestoneHost';
 import SongActionsHost from './components/SongActionsHost';
+import WelcomeHost from './components/WelcomeHost';
 import { ToastHost } from './components/ui/Toast';
 import { FlightLayer } from './motion/flight';
 import SplashScreen from './screens/SplashScreen';
 import RootNavigator from './navigation/RootNavigator';
 import { navigationRef } from './navigation/navigationRef';
+import { resetPlayback } from './services/playbackController';
 import { supabase } from './services/supabase';
 import { useAuthStore } from './store/authStore';
+import { useImportStore } from './store/importStore';
 import { ThemeProvider, useTheme } from './theme/ThemeProvider';
-
-// Configure Google Sign-In if native module is available
-try {
-  const { GoogleSignin } = require('@react-native-google-signin/google-signin');
-  GoogleSignin.configure({
-    // ⚠️ IMPORTANT: Replace with your actual Web Client ID from Google Cloud Console.
-    // This is the *Web* client (not Android client) that matches your Supabase Google provider config.
-    webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
-    offlineAccess: true,
-  });
-} catch {
-  // Native module unavailable (Expo Go) — Google sign-in won't work.
-}
-
-// react-native-track-player is not available in Expo Go; import
-// dynamically so the rest of the app still works without native builds.
-type TrackPlayerModule = typeof import('react-native-track-player');
-const loadTrackPlayer = (): TrackPlayerModule | null => {
-  // NativeModules.TrackPlayer is null in Expo Go — never call require() then,
-  // because RNTP's module eval reads native constants and crashes immediately.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  if ((NativeModules as any).TrackPlayer == null) return null;
-  try {
-    return require('react-native-track-player') as TrackPlayerModule;
-  } catch {
-    return null;
-  }
-};
 
 function AppShell() {
   const theme = useTheme();
@@ -96,11 +73,13 @@ function AppShell() {
         <NavigationContainer ref={navigationRef} theme={navTheme}>
           <StatusBar style={splashDone ? (theme.isDark ? 'light' : 'dark') : 'light'} />
           {session ? (
-            <>
+            <AccessGate>
               <RootNavigator />
               <SongActionsHost />
               <MilestoneHost />
-            </>
+              <ImportWatcher />
+              <WelcomeHost />
+            </AccessGate>
           ) : (
             <AuthGate />
           )}
@@ -121,47 +100,6 @@ function AppShell() {
 export default function App() {
   const setSession = useAuthStore((state) => state.setSession);
 
-  // Set up TrackPlayer on launch so lock-screen controls and Bluetooth
-  // hardware buttons are registered. Skipped gracefully in Expo Go.
-  useEffect(() => {
-    const setup = async () => {
-      const TP = loadTrackPlayer();
-      if (!TP) return;
-
-      const { Capability, AppKilledPlaybackBehavior } = TP;
-      const TrackPlayer = TP.default;
-
-      try {
-        await TrackPlayer.setupPlayer();
-
-        await TrackPlayer.updateOptions({
-          android: {
-            appKilledPlaybackBehavior:
-              AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
-          },
-          capabilities: [
-            Capability.Play,
-            Capability.Pause,
-            Capability.Stop,
-            Capability.SkipToNext,
-            Capability.SkipToPrevious,
-            Capability.SeekTo,
-          ],
-          compactCapabilities: [
-            Capability.Play,
-            Capability.Pause,
-            Capability.SkipToNext,
-          ],
-          progressUpdateEventInterval: 1,
-        });
-      } catch {
-        // setupPlayer throws if already initialised — safe to ignore.
-      }
-    };
-
-    void setup();
-  }, []);
-
   useEffect(() => {
     if (!supabase) {
       return;
@@ -179,7 +117,12 @@ export default function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       // The library cache is saved on the phone: never let the next account see it.
-      if (event === 'SIGNED_OUT') void clearQueryCache();
+      // Sign-out (Settings, expired session, or a 401) also stops the music.
+      if (event === 'SIGNED_OUT') {
+        void resetPlayback();
+        void clearQueryCache();
+        useImportStore.getState().reset();
+      }
       setSession(nextSession);
     });
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Dimensions, Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
@@ -12,6 +12,10 @@ import PlaylistCover from '../components/PlaylistCover';
 import SkeletonLoader from '../components/SkeletonLoader';
 import SongRow from '../components/SongRow';
 import Chip from '../components/ui/Chip';
+import IconButton from '../components/ui/IconButton';
+import { MAX_DISCOVERY_ITEMS, dayOfYear, featuredBelow, formatHour, pickHomeSections } from '../components/home/homePicks';
+import { toSongInput, type HomeSection } from '../services/recsService';
+import { useHomeRecs } from '../hooks/useHomeRecs';
 import SectionHeader from '../components/ui/SectionHeader';
 import Tappable from '../components/ui/Tappable';
 import Text from '../components/ui/Text';
@@ -22,7 +26,7 @@ import * as playback from '../services/playbackController';
 import type { BottomTabParamList } from '../navigation/BottomTabNavigator';
 import type { Song } from '../hooks/useSongs';
 import { useLikedSongs } from '../hooks/useLiked';
-import { useListeningStats, useOnRepeat, useRecentlyPlayed, type TopChannel } from '../hooks/useHistory';
+import { useListeningStats, useOnRepeat, useRecentlyPlayed } from '../hooks/useHistory';
 import { useBottomPadding } from '../hooks/useBottomPadding';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore, type RecentContext } from '../store/settingsStore';
@@ -54,6 +58,8 @@ const STOP_ART = 64;
 const NODE = 10;
 const MIX = 136;
 const MIX_OFFSET = 8;
+const HOUR_ART = 48;
+const HOUR_STEP = 30; // each cover overlaps the one before by 18pt
 
 const artOf = (song: playback.SongInput | undefined) =>
   song ? song.thumbnail_url || playback.thumbnailFor(song.youtube_id) : undefined;
@@ -226,11 +232,11 @@ function Trail({ stops, play, loadingId, onOpen }: {
 // ─────────────────────────────────────────────────────────────────────────────
 // Shelves
 
-function SongCard({ song, subtitle, onPress, loading }: { song: playback.SongInput; subtitle?: string; onPress: () => void; loading: boolean }) {
+function SongCard({ song, subtitle, onPress, loading, label }: { song: playback.SongInput; subtitle?: string; onPress: () => void; loading: boolean; label?: string }) {
   const styles = useStyles();
   return (
     <Tappable style={{ width: CARD }} onPress={onPress} onLongPress={() => openSongMenu(song)} pressScale={0.96}
-      accessibilityRole="button" accessibilityLabel={`${song.title}, ${song.channel_name ?? ''}`}>
+      accessibilityRole="button" accessibilityLabel={label ?? `${song.title}, ${song.channel_name ?? ''}`}>
       <View style={styles.cardArt}>
         <Image source={{ uri: artOf(song) }} style={styles.fill} contentFit="cover" transition={150} />
         {loading ? <View style={styles.cardLoader}><ActivityIndicator color="#FFFFFF" /></View> : null}
@@ -262,23 +268,61 @@ function SetlistRow({ song, number, plays, loading, onPress }: { song: Song; num
 }
 
 /** A mix is a deck: the top song in front, more cards waiting behind it. */
-function MixDeck({ mix, loading, onPress }: { mix: TopChannel; loading: boolean; onPress: () => void }) {
+function MixDeck({ title, caption, art, label, loading, onPress }: {
+  title: string;
+  caption: string;
+  art: string;
+  label: string;
+  loading: boolean;
+  onPress: () => void;
+}) {
   const colors = useColors();
   const styles = useStyles();
   const back = { borderColor: alpha(colors.textTertiary, 0.35), borderRadius: Radius.md, borderWidth: 1, height: MIX, position: 'absolute' as const, width: MIX, backgroundColor: colors.surfaceRaised };
   return (
     <Tappable style={{ width: MIX + MIX_OFFSET * 2 }} pressScale={0.96} onPress={onPress}
-      accessibilityRole="button" accessibilityLabel={`${mix.channel_name} Mix, starts with ${mix.top_song.title}`}>
+      accessibilityRole="button" accessibilityLabel={label}>
       <View style={{ height: MIX + MIX_OFFSET * 2, marginBottom: Space[2], width: MIX + MIX_OFFSET * 2 }}>
         <View style={[back, { left: MIX_OFFSET * 2, top: 0 }]} />
         <View style={[back, { left: MIX_OFFSET, top: MIX_OFFSET }]} />
         <View style={[styles.mixFront, { top: MIX_OFFSET * 2 }]}>
-          <Image source={{ uri: mix.thumbnail_url ?? playback.thumbnailFor(mix.top_song.youtube_id) }} style={styles.fill} contentFit="cover" />
+          <Image source={{ uri: art }} style={styles.fill} contentFit="cover" />
           {loading ? <View style={styles.cardLoader}><ActivityIndicator color="#FFFFFF" /></View> : null}
         </View>
       </View>
-      <Text variant="captionStrong" numberOfLines={1}>{mix.channel_name} Mix</Text>
-      <Text variant="caption" color="textSecondary" numberOfLines={1}>Starts with {mix.top_song.title}</Text>
+      <Text variant="captionStrong" numberOfLines={1}>{title}</Text>
+      <Text variant="caption" color="textSecondary" numberOfLines={1}>{caption}</Text>
+    </Tappable>
+  );
+}
+
+/** "Your 7 pm set": one compact card, three overlapping round covers. Secondary play, not Kesar. */
+function HourCard({ section, caption, loading, onPress }: { section: HomeSection; caption: string; loading: boolean; onPress: () => void }) {
+  const styles = useStyles();
+  const colors = useColors();
+  const covers = section.items.slice(0, 3);
+  return (
+    <Tappable style={styles.hourCard} pressScale={0.98} onPress={onPress}
+      accessibilityRole="button" accessibilityLabel={`Play ${section.title}. ${caption}`}>
+      <View style={{ height: HOUR_ART, width: HOUR_ART + (covers.length - 1) * HOUR_STEP }}>
+        {covers.map((item, i) => (
+          <View key={item.youtube_id} style={[styles.hourCover, { left: i * HOUR_STEP, zIndex: covers.length - i }]}>
+            <Image source={{ uri: item.thumbnail || playback.thumbnailFor(item.youtube_id) }} style={styles.fill} contentFit="cover" />
+          </View>
+        ))}
+      </View>
+      <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+        <Text variant="subtitle" numberOfLines={1}>{section.title}</Text>
+        <Text variant="mono" color="textSecondary" numberOfLines={2}>{caption}</Text>
+      </View>
+      {loading ? (
+        <View style={{ alignItems: 'center', height: Layout.touchTarget, justifyContent: 'center', width: Layout.touchTarget }}>
+          <ActivityIndicator color={colors.accentInk} />
+        </View>
+      ) : (
+        <IconButton icon="play" iconSize={20} color={colors.text} onPress={onPress} accessibilityLabel={`Play ${section.title}`}
+          style={{ borderColor: alpha(colors.textTertiary, 0.7), borderRadius: Radius.pill, borderWidth: 1.5 }} />
+      )}
     </Tappable>
   );
 }
@@ -399,6 +443,16 @@ export default function HomeScreen({ navigation }: Props) {
   const mixes = statsQuery.data?.top_channels.filter((c) => c.plays >= 2) ?? [];
   const stats = statsQuery.data;
 
+  // Engine output (docs/RECOMMENDATIONS.md). Errors are silent: Home falls back to today's rows.
+  const recsQuery = useHomeRecs();
+  const recsCachedAtMount = useRef(recsQuery.data !== undefined);
+  const recsPlay = recsCachedAtMount.current ? firstMount : true; // late rows rise in when they arrive
+  const picks = useMemo(() => pickHomeSections(recsQuery.data, dayOfYear(new Date())), [recsQuery.data]);
+  const engineMixes = picks.mixes;
+  const mixesLoading = recsQuery.isLoading && history.length > 0;
+  const showFallbackMixes = engineMixes.length === 0 && !mixesLoading && mixes.length > 0;
+  const featuredLate = featuredBelow(history.length > 0, picks.hasEngineRows);
+
   // The trail: newest first, Liked Songs always on it.
   const trail = useMemo(() => {
     const stops = [...recentContexts].sort((a, b) => b.playedAt - a.playedAt).slice(0, 8);
@@ -427,6 +481,23 @@ export default function HomeScreen({ navigation }: Props) {
   const playList = (songs: playback.SongInput[], index: number, name: string) =>
     run(songs[index]?.youtube_id ?? name, () => playback.playSongs(songs, index, { type: 'home', name }));
 
+  const recSongs = (section: HomeSection) => section.items.slice(0, MAX_DISCOVERY_ITEMS * 2).map((item) => toSongInput(item, section.rec_id, 'home'));
+
+  /** A "Made for you" mix: the seed first, then its items, as a radio. */
+  const playMix = (section: HomeSection) => {
+    const seed = section.seed;
+    const rest = section.items.filter((item) => item.youtube_id !== seed?.youtube_id);
+    const songs = [...(seed ? [seed] : []), ...rest].map((item) => toSongInput(item, section.rec_id, 'home'));
+    const lead = seed ?? section.items[0];
+    return run(section.id, () =>
+      playback.playSongs(songs, 0, { type: 'radio', name: section.title, id: seed?.youtube_id ?? section.id }, { shuffle: false, thumbnail: lead?.thumbnail })
+    );
+  };
+
+  /** A discovery row or the hour set, played from `index`. */
+  const playRecs = (section: HomeSection, songs: playback.SongInput[], index: number, key: string) =>
+    run(key, () => playback.playSongs(songs, index, { type: 'home', name: section.title, id: section.id }));
+
   const openContext = (context: RecentContext) => {
     if (context.type === 'playlist') root?.navigate('Playlist', { playlistId: context.id });
     else if (context.type === 'liked') root?.navigate('LikedSongs');
@@ -439,6 +510,34 @@ export default function HomeScreen({ navigation }: Props) {
         )
       );
   };
+
+  const renderFeatured = () => (
+    <>
+            <Rise play={firstMount} index={section++} style={styles.section}>
+              <SectionHeader title="Featured today" subtitle="Hand-picked for this week" />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={FEATURED_WIDTH + Space[3]} decelerationRate="fast" contentContainerStyle={styles.hScroll}>
+                {FEATURED.map((item, index) => (
+                  <Tappable key={item.youtube_id} style={styles.featured} pressScale={0.98} onPress={() => void playList(FEATURED, index, 'Featured today')}
+                    onLongPress={() => openSongMenu(item)} accessibilityRole="button" accessibilityLabel={`${item.badge}: ${item.title}, ${item.channel_name}`}>
+                    <Image source={{ uri: playback.thumbnailFor(item.youtube_id) }} style={styles.fill} contentFit="cover" />
+                    <LinearGradient colors={['rgba(11,15,26,0)', 'rgba(11,15,26,0.55)', 'rgba(11,15,26,0.95)']} locations={[0.2, 0.55, 1]} style={styles.fillAbs} />
+                    <Text variant="mono" color="rgba(255,255,255,0.85)" style={styles.featuredNumber}>{String(index + 1).padStart(2, '0')} / {String(FEATURED.length).padStart(2, '0')}</Text>
+                    <View style={styles.featuredBody}>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text variant="label" color={Brand.kesarLight}>{item.badge}</Text>
+                        <Text variant="headline" color="#FFFFFF" numberOfLines={1}>{item.title}</Text>
+                        <Text variant="caption" color="rgba(255,255,255,0.8)" numberOfLines={1}>{item.channel_name}</Text>
+                      </View>
+                      <View style={styles.featuredPlay}>
+                        {loadingId === item.youtube_id ? <ActivityIndicator color="#FFFFFF" /> : <Ionicons name="play" size={18} color="#FFFFFF" style={{ marginLeft: 2 }} />}
+                      </View>
+                    </View>
+                  </Tappable>
+                ))}
+              </ScrollView>
+            </Rise>
+    </>
+  );
 
   const bottomPadding = useBottomPadding();
   let section = 0; // stagger index for entrance choreography
@@ -497,29 +596,46 @@ export default function HomeScreen({ navigation }: Props) {
               <Trail stops={trail} play={firstMount} loadingId={loadingId} onOpen={openContext} />
             </Rise>
 
-            <Rise play={firstMount} index={section++} style={styles.section}>
-              <SectionHeader title="Featured today" subtitle="Hand-picked for this week" />
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={FEATURED_WIDTH + Space[3]} decelerationRate="fast" contentContainerStyle={styles.hScroll}>
-                {FEATURED.map((item, index) => (
-                  <Tappable key={item.youtube_id} style={styles.featured} pressScale={0.98} onPress={() => void playList(FEATURED, index, 'Featured today')}
-                    onLongPress={() => openSongMenu(item)} accessibilityRole="button" accessibilityLabel={`${item.badge}: ${item.title}, ${item.channel_name}`}>
-                    <Image source={{ uri: playback.thumbnailFor(item.youtube_id) }} style={styles.fill} contentFit="cover" />
-                    <LinearGradient colors={['rgba(11,15,26,0)', 'rgba(11,15,26,0.55)', 'rgba(11,15,26,0.95)']} locations={[0.2, 0.55, 1]} style={styles.fillAbs} />
-                    <Text variant="mono" color="rgba(255,255,255,0.85)" style={styles.featuredNumber}>{String(index + 1).padStart(2, '0')} / {String(FEATURED.length).padStart(2, '0')}</Text>
-                    <View style={styles.featuredBody}>
-                      <View style={{ flex: 1, gap: 2 }}>
-                        <Text variant="label" color={Brand.kesarLight}>{item.badge}</Text>
-                        <Text variant="headline" color="#FFFFFF" numberOfLines={1}>{item.title}</Text>
-                        <Text variant="caption" color="rgba(255,255,255,0.8)" numberOfLines={1}>{item.channel_name}</Text>
-                      </View>
-                      <View style={styles.featuredPlay}>
-                        {loadingId === item.youtube_id ? <ActivityIndicator color="#FFFFFF" /> : <Ionicons name="play" size={18} color="#FFFFFF" style={{ marginLeft: 2 }} />}
-                      </View>
-                    </View>
-                  </Tappable>
-                ))}
-              </ScrollView>
-            </Rise>
+            {!featuredLate ? renderFeatured() : null}
+
+            {/* Made for you: the engine's mixes (calm: replaces "Your mixes", never adds a row) */}
+            {mixesLoading ? (
+              <Rise play={firstMount} index={section++} style={styles.section}>
+                <SectionHeader title="Made for you" subtitle="Building your mixes" />
+                <View style={[styles.hScroll, { flexDirection: 'row' }]}>
+                  {[0, 1, 2].map((i) => <SkeletonLoader key={i} width={MIX} height={MIX} borderRadius={Radius.md} />)}
+                </View>
+              </Rise>
+            ) : engineMixes.length > 0 ? (
+              <Rise play={recsPlay} index={section++} style={styles.section}>
+                <SectionHeader title="Made for you" subtitle="Endless radio, shaped by what you play" />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
+                  {engineMixes.map((mix) => (
+                    <MixDeck key={mix.id} title={mix.title} caption={mix.subtitle} label={`Play ${mix.title}`}
+                      art={(mix.seed ?? mix.items[0]).thumbnail || playback.thumbnailFor((mix.seed ?? mix.items[0]).youtube_id)}
+                      loading={loadingId === mix.id} onPress={() => void playMix(mix)} />
+                  ))}
+                </ScrollView>
+              </Rise>
+            ) : null}
+
+            {/* One discovery row, rotating daily; the reason lives in the header, not on each card */}
+            {picks.discovery ? (
+              <Rise play={recsPlay} index={section++} style={styles.section}>
+                <SectionHeader title={picks.discovery.title} subtitle={picks.discovery.subtitle} />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
+                  {(() => {
+                    const row = picks.discovery!;
+                    const songs = recSongs(row).slice(0, MAX_DISCOVERY_ITEMS);
+                    return songs.map((song, i) => (
+                      <SongCard key={song.youtube_id} song={song} loading={loadingId === song.youtube_id}
+                        label={`Play ${song.title} by ${song.channel_name ?? 'unknown artist'}`}
+                        onPress={() => void playRecs(row, songs, i, song.youtube_id)} />
+                    ));
+                  })()}
+                </ScrollView>
+              </Rise>
+            ) : null}
 
             {onRepeat.length >= 3 ? (
               <Rise play={firstMount} index={section++} style={styles.section}>
@@ -531,12 +647,24 @@ export default function HomeScreen({ navigation }: Props) {
               </Rise>
             ) : null}
 
-            {mixes.length > 0 ? (
+            {picks.hour ? (
+              <Rise play={recsPlay} index={section++} style={[styles.block]}>
+                <HourCard section={picks.hour} loading={loadingId === picks.hour.id}
+                  caption={`${picks.hour.items.length} songs · what you play around ${formatHour(new Date().getHours())}`}
+                  onPress={() => void playRecs(picks.hour!, recSongs(picks.hour!), 0, picks.hour!.id)} />
+              </Rise>
+            ) : null}
+
+            {featuredLate ? renderFeatured() : null}
+
+            {showFallbackMixes ? (
               <Rise play={firstMount} index={section++} style={styles.section}>
                 <SectionHeader title="Your mixes" subtitle="Endless radio from the channels you play most" />
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
                   {mixes.map((mix) => (
-                    <MixDeck key={mix.channel_name} mix={mix} loading={loadingId === mix.top_song.youtube_id}
+                    <MixDeck key={mix.channel_name} title={`${mix.channel_name} Mix`} caption={`Starts with ${mix.top_song.title}`}
+                      label={`${mix.channel_name} Mix, starts with ${mix.top_song.title}`}
+                      art={mix.thumbnail_url ?? playback.thumbnailFor(mix.top_song.youtube_id)} loading={loadingId === mix.top_song.youtube_id}
                       onPress={() => void run(mix.top_song.youtube_id, () => playback.startRadio(mix.top_song, `${mix.channel_name} Mix`))} />
                   ))}
                 </ScrollView>
@@ -652,6 +780,16 @@ const useStyles = makeStyles((t) => ({
   cardArt: { backgroundColor: t.colors.surfaceRaised, borderRadius: Radius.md, height: CARD, marginBottom: Space[2], overflow: 'hidden', width: CARD },
   cardLoader: { alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.45)', bottom: 0, justifyContent: 'center', left: 0, position: 'absolute', right: 0, top: 0 },
   mixFront: { backgroundColor: t.colors.surfaceRaised, borderRadius: Radius.md, height: MIX, left: 0, overflow: 'hidden', position: 'absolute', width: MIX, ...Elevation.floating },
+  hourCard: {
+    alignItems: 'center',
+    backgroundColor: t.colors.surface,
+    borderRadius: Radius.lg,
+    flexDirection: 'row',
+    gap: Space[4],
+    padding: Space[4],
+    ...(t.isDark ? {} : Elevation.card),
+  },
+  hourCover: { backgroundColor: t.colors.surfaceRaised, borderColor: t.colors.surface, borderRadius: Radius.pill, borderWidth: 2, height: HOUR_ART, overflow: 'hidden', position: 'absolute', top: 0, width: HOUR_ART },
   quickRow: { alignItems: 'center', flexDirection: 'row', gap: Space[3], minHeight: 60 },
   quickArt: { backgroundColor: t.colors.surfaceRaised, borderRadius: Radius.xs, height: 48, overflow: 'hidden', width: 48 },
   credits: {

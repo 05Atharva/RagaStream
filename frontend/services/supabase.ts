@@ -1,4 +1,5 @@
 import 'react-native-url-polyfill/auto';
+import './cryptoPolyfill'; // SHA-256 PKCE for Google sign-in (must run before createClient)
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
@@ -12,6 +13,8 @@ export const supabase: SupabaseClient | null =
           storage: AsyncStorage,
           autoRefreshToken: true,
           detectSessionInUrl: false,
+          // Google sign-in returns a ?code= to the app; email confirmation links do too.
+          flowType: 'pkce',
           persistSession: true,
         },
       })
