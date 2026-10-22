@@ -1,0 +1,40 @@
+{
+ "title": "Road trip",
+ "channel": "Some Curator",
+ "playlist_count": 5,
+ "thumbnails": [
+  {
+   "url": "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg"
+  }
+ ],
+ "entries": [
+  {
+   "id": "aaaaaaaaaaa",
+   "title": "Arijit Singh - Kesariya (Official Video)",
+   "channel": "Sony Music India",
+   "duration": 268
+  },
+  {
+   "id": "bbbbbbbbbbb",
+   "title": "[Private video]",
+   "duration": null
+  },
+  {
+   "id": "ccccccccccc",
+   "title": "Tum Hi Ho",
+   "channel": "Arijit Singh - Topic",
+   "duration": 262
+  },
+  {
+   "id": "ddddddddddd",
+   "title": "[Deleted video]"
+  },
+  {
+   "id": "aaaaaaaaaaa",
+   "title": "Duplicate of the first",
+   "channel": "x",
+   "duration": 1
+  },
+  null
+ ]
+}

@@ -9,7 +9,7 @@ import os
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import admin, history, liked, media, playlists, search, songs, youtube
+from routers import admin, auth_return, events, history, importer, liked, me, media, owner, playlists, recs, search, songs, youtube
 from auth import get_current_user
 from db import get_supabase
 
@@ -81,9 +81,20 @@ app.include_router(youtube.router,   prefix="/youtube",   tags=["YouTube"])
 app.include_router(playlists.router, prefix="/playlists", tags=["Playlists"])
 app.include_router(liked.router,     prefix="/liked",     tags=["Liked"])
 app.include_router(history.router,   prefix="/history",   tags=["History"])
+app.include_router(importer.router,  prefix="/import",    tags=["Import"], dependencies=_signed_in)
 app.include_router(search.router,    prefix="/search",    tags=["Search"], dependencies=_signed_in)
 app.include_router(admin.router,     prefix="/admin",     tags=["Admin"])
 app.include_router(media.router,                          tags=["Media"], dependencies=_signed_in)
+# Recommendations (docs/RECOMMENDATIONS.md). Both check sign-in on every route.
+app.include_router(events.router,                         tags=["Recs"])
+app.include_router(recs.router,                           tags=["Recs"])
+# Owner approval status: signed-in only, deliberately not approval-gated.
+app.include_router(me.router,                             tags=["Me"])
+# Google sign-in's landing page on the way back into the app. Public by design:
+# it only forwards the sign-in result to the app's own exp:// / ragastream:// links.
+app.include_router(auth_return.router,                    tags=["Auth"])
+# Owner reviews new accounts (Settings → Requests). Approved + OWNER_EMAILS only.
+app.include_router(owner.router,                          tags=["Owner"])
 
 
 @app.get("/health", tags=["Health"])

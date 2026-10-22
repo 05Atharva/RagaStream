@@ -34,6 +34,10 @@ router = APIRouter()
 # needed when live browser decryption fails (e.g. Chrome App-Bound Encryption / DPAPI).
 YTDLP_COOKIES_FROM_BROWSER = os.environ.get("YTDLP_COOKIES_FROM_BROWSER")
 YTDLP_COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE")
+if YTDLP_COOKIES_FILE and not os.path.isfile(YTDLP_COOKIES_FILE):
+    # e.g. Render's secret file not uploaded yet: run without cookies rather than fail every request.
+    logging.getLogger(__name__).warning("YTDLP_COOKIES_FILE %s not found; continuing without cookies.", YTDLP_COOKIES_FILE)
+    YTDLP_COOKIES_FILE = None
 
 # ---------------------------------------------------------------------------
 # In-memory stream-URL cache
@@ -165,6 +169,12 @@ async def search_youtube(
     Returns up to `limit` results with id, title, channel, duration, thumbnail.
     Cached per query for 30 minutes; identical concurrent searches share one call.
     """
+    return await search_videos(q, limit)
+
+
+async def search_videos(q: str, limit: int = 8) -> List[YouTubeSearchResult]:
+    """The search behind /youtube/search (30-minute cache, in-flight sharing).
+    Raises HTTPException (502/500) when YouTube fails. Shared with the playlist importer."""
     key = " ".join(q.lower().split())
     cached = _search_cache.get(key)
     if cached and cached["expires_at"] > time.time() and cached["limit"] >= limit:
@@ -246,19 +256,14 @@ RADIO_CACHE_TTL_SECONDS = 60 * 60   # 1 hour — mixes change slowly
 _radio_cache: Dict[str, Dict[str, Any]] = {}
 
 
-@router.get("/radio", response_model=List[YouTubeSearchResult])
-async def get_radio(
-    id: str = Query(..., min_length=1, description="Seed YouTube video ID"),
-    limit: int = Query(25, ge=1, le=50, description="Max tracks (1-50)"),
-    _user: dict = Depends(get_current_user),
-):
+async def fetch_mix(youtube_id: str, limit: int = 50) -> List[YouTubeSearchResult]:
     """
-    Song radio: tracks related to a seed video, taken from YouTube's
-    auto-generated "Mix" playlist (list=RD<id>). The seed itself is excluded.
-    Powers Start radio, Autoplay and Smart Shuffle recommendations.
+    YouTube's auto-generated Mix (list=RD<id>) for a seed video, seed excluded.
+    Cached for an hour. Raises yt_dlp.utils.DownloadError when YouTube refuses.
+    Shared by /youtube/radio and the recommendation graph (recs/graph.py).
     """
     now = time.time()
-    cached = _radio_cache.get(id)
+    cached = _radio_cache.get(youtube_id)
     if cached and cached["expires_at"] > now:
         return cached["data"][:limit]
 
@@ -269,12 +274,12 @@ async def get_radio(
     }
 
     def _run_radio() -> list:
-        url = f"https://www.youtube.com/watch?v={id}&list=RD{id}"
+        url = f"https://www.youtube.com/watch?v={youtube_id}&list=RD{youtube_id}"
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             entries = info.get("entries", []) if info else []
             results = []
-            seen = {id}
+            seen = {youtube_id}
             for entry in entries:
                 if not entry or not entry.get("id") or entry["id"] in seen:
                     continue
@@ -290,17 +295,30 @@ async def get_radio(
                 )
             return results
 
+    results = await asyncio.get_event_loop().run_in_executor(None, _run_radio)
+    _radio_cache[youtube_id] = {"data": results, "expires_at": now + RADIO_CACHE_TTL_SECONDS}
+    return results[:limit]
+
+
+@router.get("/radio", response_model=List[YouTubeSearchResult])
+async def get_radio(
+    id: str = Query(..., min_length=1, description="Seed YouTube video ID"),
+    limit: int = Query(25, ge=1, le=50, description="Max tracks (1-50)"),
+    _user: dict = Depends(get_current_user),
+):
+    """
+    Song radio: tracks related to a seed video, taken from YouTube's
+    auto-generated "Mix" playlist (list=RD<id>). The seed itself is excluded.
+    Powers Start radio, Autoplay and Smart Shuffle recommendations.
+    """
     try:
-        results = await asyncio.get_event_loop().run_in_executor(None, _run_radio)
+        return await fetch_mix(id, limit)
     except yt_dlp.utils.DownloadError as exc:
         logger.error("yt-dlp radio error for %s: %s", id, exc)
         raise HTTPException(status_code=502, detail="Could not build radio for this song.")
     except Exception as exc:
         logger.exception("Unexpected radio error for %s: %s", id, exc)
         raise HTTPException(status_code=500, detail="Internal server error.")
-
-    _radio_cache[id] = {"data": results, "expires_at": now + RADIO_CACHE_TTL_SECONDS}
-    return results[:limit]
 
 
 def _ydl_error_to_http(video_id: str, exc: Exception) -> HTTPException:
