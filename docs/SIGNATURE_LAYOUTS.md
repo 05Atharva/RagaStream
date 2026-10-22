@@ -78,11 +78,25 @@ Order and colours:
 
 1. **Pick up where you left off** — the screen's one Kesar action. A surface card: on the left a small deck of your last three songs (104pt; the two behind fan out right with +16/+30pt and 4°/8° on arrival, `out`, 280ms); on the right label, title, channel, a 48pt Kesar play circle and a mono count (`12 recent songs`). Tap plays Recently played from the top. Before any history exists it becomes **Start here** with the featured songs.
 2. **Your trail** — recent playlists, channels and radios on one horizontal line (the Queue's timeline turned sideways). Each stop: a node on the line (newest = filled Neel, others hollow), 64pt cover (circle for channels, rounded square otherwise), name, mono time-ago (`3h ago`, `Yesterday`). Liked Songs is always a stop. The line *draws* left→right on first mount (360ms, glide).
-3. **Featured today** — editorial cards, mono `01 / 04` index, outlined white play (secondary, not Kesar).
-4. **On repeat** — a numbered setlist (top 5): mono number, 44pt art, title/channel, plays as mono `12×`.
-5. **Your mixes** — each mix is a deck: the top song's art in front, two offset blank cards behind.
-6. **Quick picks** — 3-row columns that page sideways (from Liked Songs, or the catalogue).
-7. **Recently played** — song cards, after the one already shown in Pick up.
-8. **Your listening** — liner credits on a surface card: `PLAYS` · `TOP CHANNEL` · `TOP SONG` → Stats.
+3. **Made for you** *(engine)* — replaces "Your mixes". Up to 3 mixes from the recommendation engine, each a deck (top song's art in front, two offset blank cards behind), title = mix name, caption = the engine's subtitle. Tap starts it as a radio from the seed. While the engine loads with no saved copy, three skeleton decks hold the place. If the engine returns no mixes (error, empty, backend not deployed), Home shows the old channel-based **Your mixes** after On repeat, unchanged.
+4. **One discovery row** *(engine)* — exactly one of "Because you played …", "New to you" or "Back on rotation", chosen by day-of-year modulo the rows available (fresh each day, stable within a day). The reason lives in the header subtitle; cards are art, title and channel only (max 10). Long-press opens the global song menu ("Hide from recommendations", "Don't recommend {channel}"). Hidden without engine data.
+5. **On repeat** — a numbered setlist (top 5): mono number, 44pt art, title/channel, plays as mono `12×`.
+6. **Your {time} set** *(engine)* — the hour set as one compact surface card: three overlapping round covers, title, mono caption (`12 songs · what you play around 7 pm`) and an outlined secondary play button (never Kesar). Tap anywhere plays. Hidden without engine data.
+7. **Featured today** — editorial cards, mono `01 / 04` index, outlined white play (secondary, not Kesar). With no listening history it stays up high (right after the trail) because it carries the empty Home; once there is history and engine rows it moves down to here.
+8. **Quick picks** — 3-row columns that page sideways (from Liked Songs, or the catalogue).
+9. **Recently played** — song cards, after the one already shown in Pick up.
+10. **Your listening** — liner credits on a surface card: `PLAYS` · `TOP CHANNEL` · `TOP SONG` → Stats.
+
+**Section order by state**
+- *Cold start* (no history): Pick up (Start here), Trail, Featured, [engine rows if any], Quick picks, Your listening.
+- *Engine ready*: Pick up, Trail, Made for you, Discovery, On repeat, Hour set, Featured, Quick picks, Recently played, Your listening.
+- *Engine failed or empty*: exactly today's Home — Pick up, Trail, Featured, On repeat, Your mixes (channels), Quick picks, Recently played, Your listening. No error banner for recommendations.
+
+**Calm rules** (the owner's brief: the user shouldn't feel overwhelmed)
+- The engine replaces or merges into existing rows; it never just adds rows. Net new: one discovery row and one compact card.
+- One discovery row, rotating daily, never three.
+- Reasons go in section subtitles, not on every card.
+- The hour set is one card, not a row of cards.
+- Only the Made-for-you area shows a skeleton; the other engine rows simply rise in when ready. The saved React Query copy shows the last recommendations offline.
 
 Every play shows its spinner on the item itself; errors are a toast with a fix. Reduce-motion: the fan and the line draw render at rest.

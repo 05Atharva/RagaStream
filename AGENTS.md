@@ -15,6 +15,7 @@ Users should finish a session feeling **they made something**: a playlist, a lib
 | Who it's for, journeys, acceptance criteria | `docs/USER_STORIES.md` |
 | Visual system: brand, colour, type, spacing, motion, components | `frontend/DESIGN.md` |
 | Layout of Now Playing, Queue, Library, Mini player | `docs/SIGNATURE_LAYOUTS.md` |
+| Recommendation engine: signals, ranking, surfaces, API | `docs/RECOMMENDATIONS.md` |
 | Design tokens in code | `frontend/constants/theme.ts` |
 | Backend endpoints and schema | `backend/README.md`, `backend/schemas.py` |
 | Product requirements (local only, gitignored) | `prd.txt` |
@@ -24,7 +25,9 @@ Users should finish a session feeling **they made something**: a playlist, a lib
 ## Repo map
 
 ```
-backend/            FastAPI app (routers/: youtube, media, playlists, liked, history, songs, search, admin)
+backend/            FastAPI app (routers/: youtube, media, playlists, liked, history, songs, search, admin, events, recs)
+  recs/             recommendation engine: graph, profile, candidates, features, ranker, rerank, surfaces
+  tests/            unittest suites (fakes only: no network, no DB)
 frontend/
   screens/          one file per screen
   components/       shared UI (SongRow, SongActionsHost, sheets, MiniPlayer…)
@@ -45,6 +48,7 @@ docs/               user stories and product docs
 venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+venv\Scripts\python -m unittest discover -s tests   # backend tests — must pass before you commit
 
 # Frontend (from frontend/)
 npm run dev                      # Expo with LAN host from .env
@@ -52,17 +56,18 @@ npx tsc --noEmit -p .            # typecheck — must be clean before you commit
 npx expo export --platform android --output-dir <tmp>   # full bundle check for import/worklet errors
 ```
 
-There is no automated test suite yet. Before saying something works, typecheck, bundle, and exercise the logic you changed. Say plainly what you could not verify (e.g. gestures need a real device).
+The backend has unittest suites in `backend/tests/` (fakes only); the app has none yet. Before saying something works, run the tests, typecheck, bundle, and exercise the logic you changed. Say plainly what you could not verify (e.g. gestures need a real device).
 
 ## Architecture rules (non-negotiable)
 
-1. **Playback goes through `services/playbackController.ts`.** Call `playSongs(songs, index, context)`, `startRadio`, `addToQueue`, `playNext`, `next`, `previous`, `togglePlay`, `seek`. Never call `TrackPlayer` directly from UI and never write `currentTrack` / `queue` into `playerStore` from a screen. `audioPlayer.ts` is a one-track engine (RNTP in native builds, expo-av in Expo Go) and knows nothing about queues. Audio is always loaded from the backend relay, never from a YouTube URL directly: YouTube locks stream URLs to the extracting IP, so a phone that hops to mobile data would get 403s mid-song. Get the link from `GET /youtube/stream` (`audio_path`, signed, valid 12h); players can't send our auth header, so the relay checks that signature instead.
+1. **Playback goes through `services/playbackController.ts`.** Call `playSongs(songs, index, context)`, `startRadio`, `addToQueue`, `playNext`, `next`, `previous`, `togglePlay`, `seek`. Never call `TrackPlayer` directly from UI and never write `currentTrack` / `queue` into `playerStore` from a screen. `audioPlayer.ts` is a one-track engine (expo-audio everywhere: Expo Go and installed builds, with lock-screen controls in builds; react-native-track-player and expo-av are gone) and knows nothing about queues. Audio is always loaded from the backend relay, never from a YouTube URL directly: YouTube locks stream URLs to the extracting IP, so a phone that hops to mobile data would get 403s mid-song. Get the link from `GET /youtube/stream` (`audio_path`, signed, valid 12h); players can't send our auth header, so the relay checks that signature instead.
 2. **Song actions are global.** Open the menu with `openSongMenu(song, options)` and the save sheet with `openSaveSheet(song)`. Don't build per-screen menus.
 3. **Library mutations live in `services/libraryActions.ts`** (like, save to playlist, remove, share, create). They update the React Query cache. Query keys: `['liked']`, `['playlists']` (summaries), `['playlist', id]`, `['playlist-containing', youtubeId]`, `['history', …]`.
 4. **Persisted user preferences live in `store/settingsStore.ts`.**
 5. Keep yt-dlp current (`pip install -U yt-dlp`). A `googlevideo.com` 403 on playback almost always means YouTube changed and yt-dlp needs updating, not an app bug.
-6. **Caching.** React Query is the app's cache (`services/queryClient.ts`): 5-minute `staleTime`, and the library families (`liked`, `playlists`, `playlist`, `history`, `songs`, `lyrics`, `artwork-color`, `genre-home`) are saved to AsyncStorage for 7 days. When you add a query family, add it to `SAVED` only if it is per-user library data or a slow, stable lookup; bump `CACHE_VERSION` if you change the shape of a saved response. Mutations must update or invalidate the cache (that's what makes the long `staleTime` safe). `clearQueryCache()` runs on sign-out. The backend keeps in-memory caches too: stream links 30 min, search 30 min, radio 1 h, lyrics and colours 24 h (they reset when uvicorn restarts).
-7. **Security.** Every backend endpoint requires a signed-in user (`get_current_user`, router-level in `main.py` or per route) except `/health` and the signed audio relay; user-data queries also filter by `user_id`. The DB client uses the service-role key; the public roles (`anon`, `authenticated`) have **no** table access (`backend/harden_security.sql`), so the app must never query Supabase tables directly — add a backend endpoint instead. New tables: enable RLS and re-run that script. Don't log secrets or tokens; never commit `.env` or `backend/cookies.txt`.
+6. **Caching.** React Query is the app's cache (`services/queryClient.ts`): 5-minute `staleTime`, and the library families (`liked`, `playlists`, `playlist`, `history`, `songs`, `lyrics`, `artwork-color`, `genre-home`, `recs-home`, `feedback`) are saved to AsyncStorage for 7 days. When you add a query family, add it to `SAVED` only if it is per-user library data or a slow, stable lookup; bump `CACHE_VERSION` if you change the shape of a saved response. Mutations must update or invalidate the cache (that's what makes the long `staleTime` safe). `clearQueryCache()` runs on sign-out. The backend keeps in-memory caches too: stream links 30 min, search 30 min, radio 1 h, lyrics and colours 24 h, recommendation profile 2 min, Home recs 3 h (they reset when uvicorn restarts). The Mix graph is also stored in `related_songs` for 7 days.
+7. **Recommendations come from the engine** (`backend/recs/`, `/recs/*`, spec in `docs/RECOMMENDATIONS.md`). The app asks `services/recsService.ts`; only `playbackController.ts` may fall back to `/youtube/radio` when the engine fails. Listening signals (start / skip / complete) are logged by the controller through `services/eventLog.ts`; library actions log like / save / queue. "Hide" and "Don't recommend this channel" go to `/feedback` (the local list is only an offline mirror). Every recommended item carries its slate's `rec_id`; keep it on the track so outcomes can train the ranker. On Home, engine output replaces or merges into existing sections; it never just adds rows.
+8. **Security.** Every backend endpoint requires a signed-in user (`get_current_user`, router-level in `main.py` or per route) except `/health` and the signed audio relay; new accounts start `pending` and the owner must approve them, and that gate lives in `get_current_user` in `auth.py` (only `/me/access` uses the ungated `get_signed_in_user`); user-data queries also filter by `user_id`. The DB client uses the service-role key; the public roles (`anon`, `authenticated`) have **no** table access (`backend/harden_security.sql`), so the app must never query Supabase tables directly — add a backend endpoint instead. New tables: enable RLS and re-run that script. Don't log secrets or tokens; never commit `.env` or `backend/cookies.txt`.
 
 ## Design rules
 

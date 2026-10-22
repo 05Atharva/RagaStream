@@ -52,11 +52,24 @@ Each story has acceptance criteria (what must be true) and the **moment** it sho
 As a new user, I want to sign in with Google or email in under 30 seconds, so I can start listening right away.
 - One primary action per step (Figma: progressive disclosure); errors say what went wrong and how to fix it.
 - Password field has a show/hide toggle; the keyboard type matches the field.
+- Google sign-in opens in the in-app browser (Supabase OAuth with PKCE), so it works in Expo Go and in builds alike; closing the browser is a silent no-op, and a failure says what happened and what to do.
+- New accounts wait for owner approval. Until then a clear screen says "You're on the list", shows the email they'll hear from, offers "Check again", and opens the app by itself once approved. A declined account sees "This account isn't approved" with Sign out. If the server can't be reached, the screen says so with Retry.
+- The owner approves from the app. When someone signs up, the owner gets an email; Settings → Requests (visible only to the owner, with a count badge) lists who is waiting with Approve and Decline. Approve is immediate; Decline asks first. Recent decisions can be changed. The waiting person's screen opens the app by itself within about 30 seconds of approval.
+- Signing out (or an expired session) stops the music and empties the queue.
 - *Moment*: the logo animation resolves into the Home screen. The brand's first impression.
 
 **US-02 · An app that's useful on day one**
 As a new user with no history, I want Home to already have something good to play, so the app doesn't feel empty.
 - Home shows Featured and genre shortcuts before any history exists; every empty state names what will appear and how to fill it.
+- Recommendation rows never leave Home empty or broken: with no history, Featured stays high on the page, and if the recommendation engine is unavailable Home shows its usual rows with no error banner.
+
+**US-23 · A welcome that knows me**
+As a new user, I want the app to greet me by name and show me where to start, so I feel recognised from the first minute.
+- Shown once per account, the first time an approved user reaches the app. "Seen" is stored per user id, so a second account on the same phone still gets it.
+- A full-screen moment over Home in the auth screens' look: the Meend stroke draws once, then "Welcome to RagaStream, Atharva" (first name from the sign-in profile, else the email before the @, capitalised), one warm line, and three quiet points (import, radio that learns, lyrics that follow along).
+- One Kesar button, "Import a playlist", opens the import flow; the ghost "Start listening" dismisses. Either button, or the back button, ends it for that account for good.
+- The words rise in after the stroke draws; with reduce-motion they fade. Never blocks playback.
+- *Moment*: the app already knows your name.
 
 ### J2 · The daily "press play"
 
@@ -79,6 +92,7 @@ As Aditi, I want playback to recover when a stream drops, so a tunnel doesn't en
 **US-06 · Endless music from one song**
 As Kabir, I want to start a radio from any song, so I can discover similar music without searching.
 - "Go to song radio" is in every song menu; Autoplay continues when any list ends (toggle in Settings).
+- Home's "Made for you" mixes start an endless radio from a seed song in one tap, with a spinner on the mix itself.
 
 **US-07 · Search that understands me**
 As any user, I want results as I type, with my recent searches remembered, so finding music is fast.
@@ -89,6 +103,14 @@ As any user, I want results as I type, with my recent searches remembered, so fi
 As Meera, I want to browse by genre (Devotional, Classical, Ghazals), so I can find music for the moment.
 - Genre chips filter Home in place; nothing navigates away unexpectedly.
 
+**US-21 · Recommendations that learn from me**
+As Kabir, I want what I skip, finish and like to shape what the app suggests, and to see a plain reason, so Home feels like it knows me without being noisy.
+- Skips, completions, likes and saves steer autoplay, radio and Home; two quick skips change the next picks right away.
+- Home stays calm: "Made for you" (up to 3 mixes) replaces "Your mixes", exactly one discovery row rotates daily, and the hour set is one compact card.
+- The reason shows once, in the row's subtitle ("Because you played Kun Faya Kun", "New to you"), not on every card.
+- If recommendations can't load, Home looks as it did before; nothing breaks and no error appears.
+- *Moment*: opening Home and finding a mix that sounds like you.
+
 ### J4 · Building (the achievement loop)
 
 **US-09 · Save in one place**
@@ -98,11 +120,14 @@ As Rohan, I want a single "Save to" sheet with Liked Songs and all my playlists,
 **US-10 · Arrange my playlist by hand**
 As Rohan, I want to drag songs into order, sort, and search inside a playlist, so it feels like I'm crafting it.
 - Long-press-drag reorders with haptics; sort by title, channel, date added, duration; swipe left to remove.
+- ＋ on the playlist opens an "Add songs" sheet over it (never navigates away); Done closes it and re-ticking a song in the sheet undoes the add.
 - *Moment*: the playlist cover becomes a 4-image mosaic the moment the 4th song is added.
 
 **US-11 · Help me finish a playlist**
 As Rohan, I want recommendations at the bottom of my playlist, so I can grow it with one tap per song.
-- Recommended songs are based on what's in the playlist; ＋ adds instantly with confirmation; Refresh gives new picks.
+- Recommended songs are based on what's in the playlist and your taste; ＋ adds instantly with confirmation; Refresh gives new picks.
+- The Add songs sheet searches YouTube as you type and offers Suggested (the same picks) and Liked Songs; each row adds with one tap (ticked at once, tap again to undo), songs already in the playlist start ticked, and the header counts "3 added".
+- One toast on close ("Added 3 songs to Road trip"), none per song; loading, empty, error and offline states are designed; adds from Suggested are logged as playlist_recs saves so the engine learns.
 
 **US-12 · Share what I made**
 As Rohan, I want to share a song to WhatsApp in two taps, so friends can hear it.
@@ -113,6 +138,17 @@ As any user, I want the app to notice when I've built something, so I feel owner
 - Celebrate: first playlist created, a playlist reaching 10 / 25 / 50 songs, 50 / 100 liked songs, first song played 10 times.
 - One small celebration per milestone (an animation and a line of copy), shown once, dismissible, never blocking playback.
 - *Moment*: the signature brand animation at full strength. This is the one place motion exaggerates (12 principles: exaggeration, used sparingly).
+
+**US-22 · Bring my playlists**
+As Rohan, I want to import a playlist from Spotify, YouTube, YouTube Music or Apple Music (or paste a song list), so my library is here from day one.
+- Entry points: the welcome, a Library header action, and the empty Library.
+- Paste a link (a "Paste" button reads the clipboard only when tapped) or any text: a non-link switches to a "Paste your song list" box, one song per line. Source chips show which apps work.
+- "Find songs" previews before anything is saved: cover, name, owner, "48 songs", the first 5 songs and "and 43 more", a quiet note when only part of the playlist could be read, and an editable name.
+- "Import 48 songs" starts a server job. A Meend line fills as songs match ("Matching 23 of 48") while a live list ticks each song to matched or "Not found". Cancel asks first.
+- The job keeps running if I leave the screen; a toast says when the playlist is ready.
+- Done: "Road trip is ready", "45 of 48 songs found", "Open playlist"; songs not found are listed, each with Search, which opens Add songs for that playlist with "title artist" typed in.
+- Unreadable links show the server's own explanation with Retry; offline is stated plainly; loading, empty and error states are designed.
+- *Moment*: a playlist you spent years on appearing in seconds.
 
 ### J5 · Listening deeply
 
@@ -146,6 +182,7 @@ As any user, I want a private session that doesn't record history, so what I pla
 
 **US-20 · Teach it what I don't like**
 As Kabir, I want to hide a song from radio and autoplay, so recommendations stop repeating it.
+- Long-pressing any recommended song (Home included) offers "Hide from recommendations" and "Don't recommend {channel}"; hidden items leave Home right away.
 
 ---
 

@@ -17,7 +17,7 @@ RagaStream/
 │   ├── requirements.txt
 │   └── Dockerfile
 │
-├── frontend/      # React Native app (Expo SDK 54)
+├── frontend/      # React Native app (Expo SDK 57)
 │   ├── screens/
 │   ├── components/
 │   ├── store/     # Zustand state
@@ -35,9 +35,9 @@ RagaStream/
 
 | Layer | Tech |
 |---|---|
-| Frontend | React Native · Expo SDK 54 · TypeScript |
+| Frontend | React Native · Expo SDK 57 · TypeScript |
 | State | Zustand + React Query |
-| Audio | react-native-track-player v4 |
+| Audio | expo-audio (background playback, lock-screen controls) |
 | Backend | FastAPI · Python 3.11 |
 | Database | Supabase (PostgreSQL) |
 | Streaming | yt-dlp (YouTube audio extraction) |

@@ -1,6 +1,6 @@
 # RagaStream — Frontend
 
-React Native app built with Expo SDK 54. Streams Indian music from YouTube with a premium dark UI, lock-screen controls, liked songs, playlists, and play history.
+React Native app built with Expo SDK 57. Streams Indian music from YouTube with a premium dark UI, lock-screen controls, liked songs, playlists, and play history.
 
 ---
 
