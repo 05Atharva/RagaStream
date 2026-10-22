@@ -56,6 +56,48 @@ To avoid the wait, choose one:
 
 Server memory (caches, import jobs) resets when it sleeps. That's expected.
 
+> **Found on 2026-10-22: YouTube blocks Render's free servers.** Every attempt got `429 Too Many Requests` and then `403 Forbidden`, with the latest yt-dlp, Node and fresh cookies. Render's free instances share a few outgoing IP addresses with many other apps, and YouTube throttles those. Everything except audio works on Render (sign-in, library, recommendations, import preview). For audio, run the backend on a host with its own IP: section 1d.
+
+### 1d. Oracle Cloud "Always Free" VM (recommended for audio)
+
+A dedicated VM gets its own public IP that nobody else uses, so YouTube is far less likely to block it. It's free forever: up to 4 ARM cores and 24 GB RAM. YouTube could still block it later, since it's a cloud address, but the odds are much better than on a shared host.
+
+1. **Account:** sign up at https://signup.cloud.oracle.com. A card is asked for identity; the Always Free tier isn't charged. Pick a home region close to you, for example Mumbai or Hyderabad.
+2. **Create the VM:** go to **Compute → Instances → Create instance**.
+   - Image: **Canonical Ubuntu 24.04**.
+   - Shape: **Ampere → VM.Standard.A1.Flex**, with 2 OCPU and 12 GB.
+   - Networking: keep "Assign a public IPv4 address".
+   - SSH keys: **Generate a key pair for me** and download the private key.
+   - If it says "Out of capacity", try another availability domain or try again later. ARM capacity is often full.
+3. **Open ports 80 and 443:**
+   - Open the instance → **Subnet** → **Default Security List** → **Add Ingress Rules**.
+   - Add source `0.0.0.0/0`, TCP, destination port `80`. Add the same again for `443`.
+4. **Connect:** from PowerShell, run
+   `ssh -i C:\path\to\ssh-key.key ubuntu@<public IP>`
+5. **Install the app:** on the VM, run
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/05Atharva/RagaStream/main/deploy/oracle/setup.sh | bash
+   ```
+   It installs Docker, opens the VM's own firewall, clones the repo and asks for the three Supabase values; the keys stay hidden as you type. It then builds and starts everything with automatic HTTPS, and prints your address, for example `https://140-245-1-23.sslip.io` (sslip.io turns the IP into a hostname, which Supabase requires).
+6. **Cookies:** from your laptop, run
+   `scp -i C:\path\to\ssh-key.key cookies.txt ubuntu@<public IP>:/opt/ragastream/deploy/oracle/cookies.txt`
+   Then on the VM, run
+   `cd /opt/ragastream/deploy/oracle && sudo docker compose restart api`
+7. **Check:** open `https://<address>/health`.
+8. **Point everything at the VM:**
+   - Add `https://<address>/auth/return**` to Supabase Redirect URLs (section 2).
+   - Set `EXPO_PUBLIC_API_URL` in `frontend/eas.json` to `https://<address>`, then rebuild the APK (section 3).
+   - You can then delete the Render service or keep it; nothing uses it.
+
+| Task on the VM | Command (in `/opt/ragastream/deploy/oracle`) |
+|---|---|
+| Logs | `sudo docker compose logs -f api` |
+| Update the code | re-run the `curl … setup.sh \| bash` line (it pulls and rebuilds) |
+| Update yt-dlp | `sudo docker compose build --no-cache api && sudo docker compose up -d` |
+| Restart | `sudo docker compose restart` |
+
+Oracle may reclaim Always Free VMs that stay almost completely idle for 7 days. Normal listening, plus an uptime ping on `/health`, keeps it in use.
+
 ## 2. Point Supabase at the deployed backend
 
 Go to Supabase → **Authentication → URL Configuration → Redirect URLs** and add:

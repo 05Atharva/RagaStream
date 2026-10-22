@@ -67,3 +67,6 @@ implementation_plan.md
 
 # ── One-shot migration scripts (local only) ───────────────────────────────────
 backend/migrate_*.py
+# Oracle VM deploy kit: secrets created on the server
+deploy/oracle/.env
+deploy/oracle/cookies.txt
