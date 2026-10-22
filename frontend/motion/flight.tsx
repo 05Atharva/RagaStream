@@ -102,7 +102,7 @@ function FlightSprite({ flight }: { flight: Flight }) {
 
   return (
     <Animated.View style={[styles.sprite, style]}>
-      <Image source={{ uri: flight.image }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
+      <Image source={{ uri: flight.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
     </Animated.View>
   );
 }

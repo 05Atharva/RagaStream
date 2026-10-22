@@ -1,4 +1,3 @@
-import React from 'react';
 import { Text as RNText, type TextProps as RNTextProps } from 'react-native';
 import { Type, type TextVariant, type ThemeColors } from '../../constants/theme';
 import { useColors } from '../../theme/ThemeProvider';

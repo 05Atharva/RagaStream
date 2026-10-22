@@ -3,7 +3,7 @@
  * One gentle S-curve (the "meend" glide) across the full width. Progress is
  * mapped by arc length, so the playhead always sits at the end of the fill.
  */
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {

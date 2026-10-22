@@ -1,4 +1,3 @@
-import React from 'react';
 import { Pressable, View } from 'react-native';
 import { Layout, Space } from '../../constants/theme';
 import Text from './Text';

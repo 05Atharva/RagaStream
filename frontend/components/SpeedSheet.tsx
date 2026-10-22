@@ -1,4 +1,3 @@
-import React from 'react';
 import { View } from 'react-native';
 import AnimatedBottomSheet from './AnimatedBottomSheet';
 import SheetRow, { SheetHeader } from './ui/SheetRow';

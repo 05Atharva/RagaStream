@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import * as Linking from 'expo-linking';
 import { supabase } from '../services/supabase';

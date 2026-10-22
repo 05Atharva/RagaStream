@@ -135,10 +135,10 @@ export default function AnimatedBottomSheet({
     >
       <GestureHandlerRootView style={styles.overlay}>
         {/* Backdrop — tap closes sheet */}
-        <Pressable style={StyleSheet.absoluteFillObject} onPress={() => animateClose(true)}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => animateClose(true)}>
           <Animated.View
             pointerEvents="none"
-            style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.scrim }, backdropStyle]}
+            style={[StyleSheet.absoluteFill, { backgroundColor: colors.scrim }, backdropStyle]}
           />
         </Pressable>
 

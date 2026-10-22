@@ -1,4 +1,3 @@
-import React from 'react';
 import { ActivityIndicator, Pressable } from 'react-native';
 import Animated from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';

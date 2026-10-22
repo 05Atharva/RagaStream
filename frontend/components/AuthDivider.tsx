@@ -1,4 +1,3 @@
-import React from 'react';
 import { View } from 'react-native';
 import { Space } from '../constants/theme';
 import { useColors } from '../theme/ThemeProvider';

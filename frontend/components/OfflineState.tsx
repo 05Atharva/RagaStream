@@ -1,4 +1,3 @@
-import React from 'react';
 import { View } from 'react-native';
 import { useColors } from '../theme/ThemeProvider';
 import EmptyState from './ui/EmptyState';

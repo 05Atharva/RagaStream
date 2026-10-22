@@ -146,6 +146,6 @@ export default function LikeButton({ isLiked, onToggle, size = 24, idleColor }: 
 
 const styles = StyleSheet.create({
   button: { alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
-  burst: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+  burst: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
   stroke: { borderRadius: 2, height: 7, position: 'absolute', width: 2.5 },
 });

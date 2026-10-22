@@ -1,0 +1,33 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ragastream-api.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://jprsscsopqnwiihkgued.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpwcnNzY3NvcHFud2lpaGtndWVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4NTUwMDcsImV4cCI6MjA4OTQzMTAwN30.H0GEnwmhyzUkjnm2u-7GwxUb0g6z9AJvIcEEYNwz2Qc"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ragastream-api.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://jprsscsopqnwiihkgued.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpwcnNzY3NvcHFud2lpaGtndWVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4NTUwMDcsImV4cCI6MjA4OTQzMTAwN30.H0GEnwmhyzUkjnm2u-7GwxUb0g6z9AJvIcEEYNwz2Qc"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

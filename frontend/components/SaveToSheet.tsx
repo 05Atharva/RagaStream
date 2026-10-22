@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 import Toast from '../services/toast';
 import AnimatedBottomSheet from './AnimatedBottomSheet';

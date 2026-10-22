@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, TextInput } from 'react-native';
 import { supabase } from '../services/supabase';
 import { signInWithGoogle } from '../services/googleAuth';
