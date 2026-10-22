@@ -9,12 +9,13 @@ import os
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import admin, auth_return, events, history, importer, liked, me, media, owner, playlists, recs, search, songs, youtube
-from auth import get_current_user
-from db import get_supabase
-
+# Before importing the routers: they log at import (e.g. youtube's yt-dlp/Node/cookies line).
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+from routers import admin, auth_return, events, history, importer, liked, me, media, owner, playlists, recs, search, songs, youtube  # noqa: E402
+from auth import get_current_user  # noqa: E402
+from db import get_supabase  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
