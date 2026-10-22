@@ -23,6 +23,11 @@
       "versionCode": 1,
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
+      ],
+      "permissions": [
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ]
     },
     "web": {
@@ -51,6 +56,12 @@
         }
       ]
     ],
-    "backgroundColor": "#0B0F1A"
+    "backgroundColor": "#0B0F1A",
+    "extra": {
+      "eas": {
+        "projectId": "aae4b4d7-dd3a-4030-a002-c9a74ad04b50"
+      }
+    },
+    "owner": "athwrva"
   }
 }
