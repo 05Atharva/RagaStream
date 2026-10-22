@@ -19,6 +19,7 @@ import os
 import json
 import base64
 import logging
+import threading
 
 from postgrest import SyncPostgrestClient
 from dotenv import load_dotenv
@@ -56,16 +57,29 @@ class SupabaseDB:
 
 
 _db: SupabaseDB | None = None
+# One client per thread. Routes run their sync DB calls on a thread pool, and a
+# single shared HTTP/2 connection used from several threads at once can be reset
+# ("RemoteProtocolError: ConnectionTerminated"): the app's burst of requests at
+# launch then got 503s. Each thread keeps its own connection instead.
+_local = threading.local()
+_logged = False
 
 
 def get_supabase() -> SupabaseDB:
-    """Return a singleton PostgREST client using the service_role key."""
-    global _db
-    if _db is None:
-        url = os.environ["SUPABASE_URL"]
-        # Prefer the explicit service-role key; fall back to SUPABASE_KEY
-        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_KEY"]
+    """Return this thread's PostgREST client (service_role key)."""
+    db = getattr(_local, "db", None)
+    if db is None:
+        db = _local.db = _create()
+    return db
 
+
+def _create() -> SupabaseDB:
+    global _db, _logged
+    url = os.environ["SUPABASE_URL"]
+    # Prefer the explicit service-role key; fall back to SUPABASE_KEY
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_KEY"]
+    if not _logged:
+        _logged = True
         role = _detect_key_role(key)
         if role == "anon":
             logger.warning(
@@ -82,9 +96,6 @@ def get_supabase() -> SupabaseDB:
             )
         else:
             logger.info("Supabase key role detected: %s", role)
-
-        _db = SupabaseDB(url, key)
-        logger.info("Supabase PostgREST client ready.")
+        logger.info("Supabase PostgREST client ready (one connection per thread).")
+    _db = SupabaseDB(url, key)
     return _db
-
-# Force reload: service_role key configured 2026-07-05
