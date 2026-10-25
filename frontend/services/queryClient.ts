@@ -15,6 +15,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import { QueryClient, onlineManager, type Query } from '@tanstack/react-query';
 import type { PersistedClient, PersistQueryClientOptions } from '@tanstack/react-query-persist-client';
+import { isRateLimited } from './rateLimit';
 
 onlineManager.setEventListener((setOnline) =>
   NetInfo.addEventListener((state) => {
@@ -31,6 +32,9 @@ export const queryClient = new QueryClient({
       // invalidate the cache directly (services/libraryActions.ts; history is
       // invalidated after every play). So data stays fresh for 5 minutes.
       staleTime: 5 * 60 * 1000,
+      // React Query's default (3 retries), except on 429: YouTube is
+      // rate-limiting the server and every retry would make it worse.
+      retry: (failureCount, error) => !isRateLimited(error) && failureCount < 3,
       // Must be at least the persist maxAge, or saved queries are dropped from
       // memory before they can be written to disk.
       gcTime: DAY,

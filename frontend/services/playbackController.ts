@@ -13,6 +13,7 @@
  */
 import Toast from './toast';
 import { apiClient } from './apiClient';
+import { RateLimitedError, isRateLimited, retryAfterSeconds, waitPhrase } from './rateLimit';
 import { queryClient } from './queryClient';
 import { ensureSongInCatalogue } from './songService';
 import { recordPlayHistory } from './historyService';
@@ -145,6 +146,8 @@ function shuffleArray<T>(items: T[]): T[] {
 const STREAM_TTL_MS = 60 * 60 * 1000; // YouTube URLs live ~6h; stay well inside
 const streamCache = new Map<string, { url: string; expiresAt: number }>();
 const streamInflight = new Map<string, Promise<string>>();
+/** Until this time (ms) the server is rate-limited by YouTube; set from its Retry-After. */
+let streamBusyUntil = 0;
 
 /**
  * Players read audio from our backend relay rather than YouTube directly:
@@ -167,6 +170,9 @@ async function resolveStreamUrl(youtubeId: string, fresh = false): Promise<strin
   if (!fresh && cached && cached.expiresAt > Date.now()) return cached.url;
   const pending = streamInflight.get(youtubeId);
   if (!fresh && pending) return pending;
+  // The server said YouTube is rate-limiting it: don't ask again until the wait is over.
+  const waitMs = streamBusyUntil - Date.now();
+  if (waitMs > 0) throw new RateLimitedError(Math.ceil(waitMs / 1000));
 
   const request = apiClient
     .get<{ audio_path: string }>('/youtube/stream', { params: { id: youtubeId, fresh: fresh || undefined } })
@@ -174,6 +180,14 @@ async function resolveStreamUrl(youtubeId: string, fresh = false): Promise<strin
       const url = relayUrl(data.audio_path, fresh);
       streamCache.set(youtubeId, { url, expiresAt: Date.now() + STREAM_TTL_MS });
       return url;
+    })
+    .catch((error: unknown) => {
+      if (isRateLimited(error)) {
+        const wait = retryAfterSeconds(error);
+        streamBusyUntil = Date.now() + wait * 1000;
+        throw new RateLimitedError(wait);
+      }
+      throw error;
     })
     .finally(() => streamInflight.delete(youtubeId));
   streamInflight.set(youtubeId, request);
@@ -426,8 +440,19 @@ async function startTrack(track: Track, index: number, fromUserQueue = false, st
 async function startOrSkip(track: Track, index: number, fromUserQueue: boolean, attempt = 0): Promise<void> {
   try {
     await startTrack(track, index, fromUserQueue);
-  } catch {
+  } catch (error) {
     set({ isLoading: false });
+    // Rate-limited: every next track would fail the same way, and each try
+    // adds to the limit. Stop here and say when to try again.
+    if (isRateLimited(error)) {
+      set({ isPlaying: false });
+      Toast.show({
+        type: 'info',
+        text1: 'YouTube is busy',
+        text2: `It's limiting requests right now. Try again in ${waitPhrase(retryAfterSeconds(error))}.`,
+      });
+      return;
+    }
     if (attempt + 1 >= MAX_SKIP_ATTEMPTS) {
       set({ isPlaying: false });
       Toast.show({ type: 'error', text1: 'Playback stopped', text2: 'Several tracks in a row were unavailable.' });
