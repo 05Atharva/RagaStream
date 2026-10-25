@@ -134,6 +134,20 @@ class GateTests(unittest.TestCase):
             self.run_gate(broken)
         self.assertEqual(self.gate.remaining(), 0)
 
+    def test_api_403_while_extracting_counts_as_a_block(self):
+        def blocked(log):
+            log.warning("[youtube] iNs_CBXA6Is: Unable to download API page: HTTP Error 403: Forbidden")
+            self.calls += 1  # never reached: the logger stops the extraction
+        with self.assertRaises(YouTubeBusy):
+            self.run_gate(blocked)
+        self.assertEqual(self.calls, 0)
+
+    def test_ordinary_warnings_do_not_stop_anything(self):
+        def chatty(log):
+            log.warning("[youtube] x: Some formats may be missing")
+            return "ok"
+        self.assertEqual(self.run_gate(chatty), "ok")
+
     def test_concurrency_cap(self):
         active = {"now": 0, "max": 0}
 
@@ -148,6 +162,37 @@ class GateTests(unittest.TestCase):
 
         asyncio.run(run())
         self.assertEqual(active["max"], 2)
+
+
+class RealYtdlpTests(unittest.TestCase):
+    """Raising from the logger must stop a real yt-dlp extraction, not get swallowed."""
+
+    def test_first_429_stops_the_extraction(self):
+        import yt_dlp
+        from yt_dlp.extractor.common import InfoExtractor
+        steps = []
+
+        class FakeYouTubeIE(InfoExtractor):
+            IE_NAME = "fakeyt"
+            _VALID_URL = r"fakeyt:(?P<id>\w+)"
+
+            def _real_extract(self, url):
+                vid = self._match_id(url)
+                self.report_warning("Unable to download webpage: HTTP Error 429: Too Many Requests", vid)
+                steps.append("tried the API anyway")
+                return {"id": vid, "title": "x", "url": "https://example.invalid/a.m4a"}
+
+        gate = Gate(max_concurrent=1, rand=no_jitter)
+
+        def extract(log):
+            with yt_dlp.YoutubeDL({"quiet": True, "logger": log, "skip_download": True}) as ydl:
+                ydl.add_info_extractor(FakeYouTubeIE())
+                return ydl.extract_info("fakeyt:abc", download=False, ie_key=FakeYouTubeIE.ie_key())
+
+        with self.assertRaises(YouTubeBusy):
+            asyncio.run(gate.run(extract))
+        self.assertEqual(steps, [])
+        self.assertEqual(gate.strikes, 1)
 
 
 class RouterTests(unittest.TestCase):

@@ -11,8 +11,10 @@ isn't made worse by our own retries.
 - The first success after a cooldown resets the backoff.
 
 yt-dlp often reports the 429 only as a warning ("Unable to download webpage:
-HTTP Error 429") and then fails with something vaguer ("Failed to extract any
-player response"), so each call gets its own logger that watches for it.
+HTTP Error 429") and then carries on, trying the player API (403 Forbidden,
+retried 3 times) before failing with something vaguer ("Failed to extract any
+player response"). So each call gets its own logger that watches for a 429 or
+an API-page 403 and stops the extraction at that first warning.
 """
 from __future__ import annotations
 
@@ -47,6 +49,21 @@ MAX_CONCURRENT = _env_int("YTDLP_MAX_CONCURRENT", 2)
 _RATE_LIMIT_RE = re.compile(r"http error 429|too many requests|rate[- ]limited", re.IGNORECASE)
 # "The current session has been rate-limited by YouTube for up to an hour."
 _LONG_LIMIT_RE = re.compile(r"for up to an hour", re.IGNORECASE)
+# "Unable to download API page: HTTP Error 403: Forbidden" while extracting: YouTube
+# refusing this server's IP (it follows the 429s), not a problem with one video.
+_BLOCKED_RE = re.compile(r"unable to download [\w ]*page: http error 403", re.IGNORECASE)
+
+try:  # yt-dlp re-raises DownloadCancelled straight out of an extraction
+    from yt_dlp.utils import DownloadCancelled as _Cancel
+except ImportError:  # pragma: no cover - yt-dlp is always installed with the backend
+    _Cancel = Exception  # type: ignore[misc,assignment]
+
+
+class StopExtraction(_Cancel):  # type: ignore[misc,valid-type]
+    """Raised from our yt-dlp logger at the first 429/403, so yt-dlp stops there
+    instead of trying more pages and clients (each one another request)."""
+
+    msg = "Stopped: YouTube is rate-limiting this server."
 
 
 def retry_delay(attempt: int, rand: Callable[[float, float], float] = random.uniform) -> float:
@@ -127,17 +144,20 @@ class YouTubeBusy(Exception):
 
 class YtdlpLog:
     """yt-dlp logger for one call: forwards warnings and errors to our log (so a
-    server-side failure says why) and remembers whether YouTube said 429."""
+    server-side failure says why), remembers whether YouTube said 429 (or
+    refused us with a 403), and stops the extraction right there."""
 
     def __init__(self) -> None:
         self.rate_limited = False
         self.retry_after: Optional[float] = None
 
-    def _note(self, msg: str) -> None:
-        if _RATE_LIMIT_RE.search(msg):
+    def _note(self, msg: str) -> bool:
+        if _RATE_LIMIT_RE.search(msg) or _BLOCKED_RE.search(msg):
             self.rate_limited = True
             if _LONG_LIMIT_RE.search(msg):
                 self.retry_after = float(MAX_DELAY)
+            return True
+        return False
 
     def debug(self, msg: str) -> None:  # yt-dlp routes info to debug too: too chatty
         pass
@@ -146,8 +166,9 @@ class YtdlpLog:
         pass
 
     def warning(self, msg: str) -> None:
-        self._note(msg)
         logging.getLogger("yt-dlp").warning("%s", msg[:400])
+        if self._note(msg):
+            raise StopExtraction()
 
     def error(self, msg: str) -> None:
         self._note(msg)
@@ -195,7 +216,7 @@ class Gate:
             delay = max(delay, retry_after)
         self.strikes += 1
         self.until = now + delay
-        logger.warning("YouTube said 429 (too many requests): pausing yt-dlp for %.0fs (429 #%d in a row).",
+        logger.warning("YouTube is rate-limiting this server (429/403): pausing yt-dlp for %.0fs (#%d in a row).",
                        delay, self.strikes)
         return delay
 
