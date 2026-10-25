@@ -436,6 +436,15 @@ async function startTrack(track: Track, index: number, fromUserQueue = false, st
   void maybeExtendWithAutoplay();
 }
 
+/** The server is rate-limited by YouTube: say so, and when to try again. */
+function toastRateLimited(error: unknown) {
+  Toast.show({
+    type: 'info',
+    text1: 'YouTube is busy',
+    text2: `It's limiting requests right now. Try again in ${waitPhrase(retryAfterSeconds(error))}.`,
+  });
+}
+
 /** Start a track; on failure, skip forward (bounded) instead of stalling. */
 async function startOrSkip(track: Track, index: number, fromUserQueue: boolean, attempt = 0): Promise<void> {
   try {
@@ -446,11 +455,7 @@ async function startOrSkip(track: Track, index: number, fromUserQueue: boolean, 
     // adds to the limit. Stop here and say when to try again.
     if (isRateLimited(error)) {
       set({ isPlaying: false });
-      Toast.show({
-        type: 'info',
-        text1: 'YouTube is busy',
-        text2: `It's limiting requests right now. Try again in ${waitPhrase(retryAfterSeconds(error))}.`,
-      });
+      toastRateLimited(error);
       return;
     }
     if (attempt + 1 >= MAX_SKIP_ATTEMPTS) {
@@ -626,9 +631,10 @@ async function reloadCurrent(): Promise<void> {
   try {
     const url = await resolveStreamUrl(getYoutubeId(track), true);
     await engine.loadAndPlay({ ...track, url }, state.currentPosition);
-  } catch {
+  } catch (error) {
     set({ isLoading: false, isPlaying: false });
-    Toast.show({ type: 'error', text1: "Couldn't resume this song", text2: 'Check your connection, then press play again.' });
+    if (isRateLimited(error)) toastRateLimited(error);
+    else Toast.show({ type: 'error', text1: "Couldn't resume this song", text2: 'Check your connection, then press play again.' });
   }
 }
 
@@ -963,9 +969,10 @@ async function recoverFromError() {
   try {
     const url = await resolveStreamUrl(getYoutubeId(track), true);
     await engine.loadAndPlay({ ...track, url }, state.currentPosition);
-  } catch {
+  } catch (error) {
     set({ isPlaying: false });
-    Toast.show({ type: 'error', text1: 'Could not reconnect. Try playing again.' });
+    if (isRateLimited(error)) toastRateLimited(error);
+    else Toast.show({ type: 'error', text1: 'Could not reconnect. Try playing again.' });
   } finally {
     recovering = false;
     set({ showReconnecting: false });
