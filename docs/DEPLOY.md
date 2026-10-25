@@ -98,6 +98,25 @@ A dedicated VM gets its own public IP that nobody else uses, so YouTube is far l
 
 Oracle may reclaim Always Free VMs that stay almost completely idle for 7 days. Normal listening, plus an uptime ping on `/health`, keeps it in use.
 
+### 1e. Keep Render, send YouTube traffic through a proxy
+
+Instead of moving hosts, you can route everything the backend sends to YouTube through a proxy whose IP YouTube doesn't throttle. In Render → your service → **Environment**, add:
+
+```
+YTDLP_PROXY=http://user:password@proxy-host:port
+```
+
+`socks5://` and `socks5h://` work too. Then **Manual Deploy**. When it's on, the startup log line ends with `proxy: http` (or `socks5`). The password is never logged.
+
+Before you pick a proxy:
+- **All audio goes through it**, not just the lookups. YouTube locks each audio URL to the IP that requested it, so the relay has to read the audio through the same proxy. A song is about 3–5 MB, so 1 GB is roughly 200–300 songs. Paid proxies usually bill per GB.
+- **Use a sticky session**: the same exit IP for hours, ideally 6. A rotating proxy changes IP between requests, and songs stop partway with a 403.
+- **Residential IPs work best.** Datacenter proxies are usually throttled by YouTube, just like Render.
+- **Don't use free public proxies.** Most are already blocked, and strangers run them.
+- **A proxy you run yourself works too**, for example on the Oracle VM from 1d. But if you have that VM, running the whole backend there (1d) is simpler and avoids the extra hop.
+
+If YouTube still answers 429 through the proxy, the proxy's IP is throttled too: try another exit IP or provider.
+
 ## 2. Point Supabase at the deployed backend
 
 Go to Supabase → **Authentication → URL Configuration → Redirect URLs** and add:

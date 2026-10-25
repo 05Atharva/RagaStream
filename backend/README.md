@@ -60,6 +60,7 @@ YTDLP_MAX_CONCURRENT=2
 > - **SUPABASE_SERVICE_ROLE_KEY** → Project Settings → API → `service_role` secret key (database access; never ship it in the app)
 > - **AUDIO_LINK_SECRET** (optional) → signs audio relay links. Defaults to a value derived from the service-role key. Set it explicitly in production so you can rotate it on its own.
 > - **CORS_ORIGINS** (optional) → comma-separated browser origins allowed to call the API. The phone app doesn't need it; defaults to `*`.
+> - **YTDLP_PROXY** (optional) → `http://`, `socks5://` or `socks5h://` proxy for everything sent to YouTube (yt-dlp and the audio relay), for hosts whose IP YouTube throttles. Use a sticky, residential proxy; see `docs/DEPLOY.md` 1e.
 > - **YTDLP_MAX_CONCURRENT** (optional) → how many yt-dlp calls may run at once. Defaults to 2; raise it only on a host YouTube isn't throttling.
 
 ---

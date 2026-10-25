@@ -72,6 +72,34 @@ except ValueError:
     YTDLP_EXTRACTOR_ARGS = None
 
 
+def _read_proxy(raw: Optional[str]) -> Optional[str]:
+    """YTDLP_PROXY, e.g. "http://user:pass@host:8080" or "socks5://user:pass@host:1080"."""
+    value = (raw or "").strip()
+    if not value:
+        return None
+    if urlparse(value).scheme not in ("http", "https", "socks5", "socks5h"):
+        logging.getLogger(__name__).warning("YTDLP_PROXY must start with http://, https://, socks5:// or socks5h://; ignoring it.")
+        return None
+    return value
+
+
+# Optional: send every request to YouTube (yt-dlp and the audio relay) through a
+# proxy, for hosts whose IP YouTube throttles. YouTube locks each audio URL to the
+# IP that extracted it, so extraction and relay must leave from the same IP: use a
+# sticky (non-rotating) proxy session. Never logged: the URL may hold a password.
+YTDLP_PROXY = _read_proxy(os.environ.get("YTDLP_PROXY"))
+
+
+def _httpx_proxy(proxy: Optional[str]) -> Optional[str]:
+    """The same proxy for httpx, which spells remote-DNS SOCKS as plain socks5."""
+    if proxy and proxy.startswith("socks5h://"):
+        return "socks5://" + proxy[len("socks5h://"):]
+    return proxy
+
+
+RELAY_PROXY = _httpx_proxy(YTDLP_PROXY)
+
+
 def _count_youtube_cookies(path: Optional[str]) -> int:
     if not path:
         return 0
@@ -83,10 +111,11 @@ def _count_youtube_cookies(path: Optional[str]) -> int:
 
 
 logging.getLogger(__name__).info(
-    "yt-dlp %s | node: %s | youtube cookies loaded: %d",
+    "yt-dlp %s | node: %s | youtube cookies loaded: %d | proxy: %s",
     getattr(getattr(yt_dlp, "version", None), "__version__", "?"),
     "yes" if shutil.which("node") else "NOT FOUND (streams will fail)",
     _count_youtube_cookies(YTDLP_COOKIES_FILE),
+    urlparse(YTDLP_PROXY).scheme if YTDLP_PROXY else "none",
 )
 
 
@@ -177,6 +206,8 @@ def _ydl_opts_base(log: Optional[YtdlpLog] = None) -> dict:
     }
     if YTDLP_EXTRACTOR_ARGS:
         opts["extractor_args"] = YTDLP_EXTRACTOR_ARGS
+    if YTDLP_PROXY:
+        opts["proxy"] = YTDLP_PROXY
     if YTDLP_COOKIES_FILE:
         opts["cookiefile"] = YTDLP_COOKIES_FILE
     elif YTDLP_COOKIES_FROM_BROWSER:
@@ -592,7 +623,7 @@ _MIME = {"m4a": "audio/mp4", "mp4": "audio/mp4", "webm": "audio/webm", "opus": "
 
 async def _probe_size(url: str, headers: dict) -> Optional[int]:
     """Total size from a 1-byte ranged read when yt-dlp didn't report it."""
-    async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
+    async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True, proxy=RELAY_PROXY) as client:
         resp = await client.get(url, headers={"Range": "bytes=0-0"})
     match = re.search(r"/(\d+)$", resp.headers.get("content-range", ""))
     return int(match.group(1)) if match else None
@@ -654,7 +685,9 @@ async def relay_audio(
         position = start
         retried = False
         waits = 0
-        async with httpx.AsyncClient(headers=source["http_headers"], timeout=20, follow_redirects=True) as client:
+        # Same exit IP as the extraction: YouTube rejects the URL from anywhere else.
+        async with httpx.AsyncClient(headers=source["http_headers"], timeout=20, follow_redirects=True,
+                                     proxy=RELAY_PROXY) as client:
             while position <= end:
                 if await request.is_disconnected():
                     return

@@ -23,3 +23,5 @@ services:
         value: atharvakanawade@gmail.com
       - key: YTDLP_COOKIES_FILE        # upload cookies.txt as a Secret File (DEPLOY.md step 2)
         value: /etc/secrets/cookies.txt
+      - key: YTDLP_PROXY               # optional: route YouTube traffic through a proxy (DEPLOY.md 1e)
+        sync: false
