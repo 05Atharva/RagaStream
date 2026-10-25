@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlsplit
 import yt_dlp
 
 from recs.text import clean_channel, clean_title
+from ytguard import YouTubeBusy, gate, wait_phrase
 
 from .errors import NO_TRACKS, NOT_PUBLIC, PASTE_INSTEAD, ImportFailure
 from .fetch import fetch_page, safe_url_for_log
@@ -436,10 +437,10 @@ def parse_generic(page: str, host: str = "") -> SourceData:
 _UNAVAILABLE_TITLES = ("[private video]", "[deleted video]", "private video", "deleted video", "[unavailable video]")
 
 
-def _flat_opts() -> dict:
+def _flat_opts(log=None) -> dict:
     from routers.youtube import _ydl_opts_base  # same yt-dlp setup as search
 
-    opts = _ydl_opts_base()
+    opts = _ydl_opts_base(log)
     # Never the server's own YouTube cookies: the link is a stranger's, and cookies could expose
     # private playlists of whoever the cookies belong to.
     opts.pop("cookiefile", None)
@@ -489,12 +490,14 @@ def build_youtube_source(info: dict) -> SourceData:
 async def fetch_youtube_playlist(list_id: str) -> SourceData:
     url = f"https://www.youtube.com/playlist?list={list_id}"
 
-    def run() -> dict:
-        with yt_dlp.YoutubeDL(_flat_opts()) as ydl:
+    def run(log) -> dict:
+        with yt_dlp.YoutubeDL(_flat_opts(log)) as ydl:
             return ydl.extract_info(url, download=False) or {}
 
     try:
-        info = await asyncio.get_running_loop().run_in_executor(None, run)
+        info = await gate.run(run)
+    except YouTubeBusy as busy:
+        raise ImportFailure(f"YouTube is limiting requests from the server. Try again in {wait_phrase(busy.retry_after)}.")
     except yt_dlp.utils.DownloadError as exc:
         logger.info("Import: YouTube playlist %s not readable: %s", list_id[:40], str(exc)[:120])
         raise ImportFailure(NOT_PUBLIC)

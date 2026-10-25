@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 ACCEPT = 0.55
 SEARCH_LIMIT = 8
 GLOBAL_SEARCHES = 4
+# Imports run in the background, so a short YouTube rate limit is waited out
+# (bounded) instead of marking every remaining song as failed.
+RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_MAX_WAIT = 120   # seconds; a longer cooldown fails the search
 
 # ---------------------------------------------------------------------------
 # Text similarity (pure Python, no dependency)
@@ -284,14 +288,29 @@ class SearchError(Exception):
     """YouTube search itself failed (not 'no good match')."""
 
 
-async def search(query: str) -> List[YouTubeSearchResult]:
+def _rate_limit_wait(exc: HTTPException) -> Optional[float]:
+    """Seconds the server asked us to wait (HTTP 429), or None for other errors."""
+    if exc.status_code != 429:
+        return None
+    try:
+        return float((exc.headers or {}).get("Retry-After", 30))
+    except (TypeError, ValueError):
+        return 30.0
+
+
+async def search(query: str, sleep=asyncio.sleep) -> List[YouTubeSearchResult]:
     from routers.youtube import search_videos  # late: keeps this module testable without yt-dlp set up
 
-    async with global_search_limit():
-        try:
-            return await search_videos(query, SEARCH_LIMIT)
-        except HTTPException as exc:
-            raise SearchError(exc.detail) from exc
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        async with global_search_limit():
+            try:
+                return await search_videos(query, SEARCH_LIMIT)
+            except HTTPException as exc:
+                wait = _rate_limit_wait(exc)
+                if wait is None or wait > RATE_LIMIT_MAX_WAIT or attempt == RATE_LIMIT_RETRIES:
+                    raise SearchError(exc.detail) from exc
+        await sleep(wait)  # outside the limit, so other searches aren't held up
+    raise SearchError("YouTube search failed.")  # unreachable; keeps type checkers happy
 
 
 async def find_match(track: SourceTrack, search_fn=search) -> Tuple[Optional[Match], bool]:

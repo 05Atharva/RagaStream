@@ -51,6 +51,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 # Optional
 AUDIO_LINK_SECRET=long-random-string
 CORS_ORIGINS=https://your-web-app.example
+YTDLP_MAX_CONCURRENT=2
 ```
 
 > Get these from your Supabase project:
@@ -59,6 +60,7 @@ CORS_ORIGINS=https://your-web-app.example
 > - **SUPABASE_SERVICE_ROLE_KEY** → Project Settings → API → `service_role` secret key (database access; never ship it in the app)
 > - **AUDIO_LINK_SECRET** (optional) → signs audio relay links. Defaults to a value derived from the service-role key. Set it explicitly in production so you can rotate it on its own.
 > - **CORS_ORIGINS** (optional) → comma-separated browser origins allowed to call the API. The phone app doesn't need it; defaults to `*`.
+> - **YTDLP_MAX_CONCURRENT** (optional) → how many yt-dlp calls may run at once. Defaults to 2; raise it only on a host YouTube isn't throttling.
 
 ---
 
@@ -88,7 +90,7 @@ The API will be available at:
 | GET | `/health` | Health check (no sign-in) |
 | GET | `/me/access` | Your approval status (`pending`, `approved`, `rejected`). Signed-in only; works before approval |
 | GET | `/youtube/search?q=` | Search YouTube (cached 30 min) |
-| GET | `/youtube/stream?id=` | Check a song is playable; returns a signed `audio_path` |
+| GET | `/youtube/stream?id=` | Check a song is playable; returns a signed `audio_path` (extraction cached until shortly before YouTube's URL expiry, up to 4 h) |
 | GET/HEAD | `/youtube/audio/{id}?exp=&sig=` | Audio relay with Range support. Needs the signed link from `/youtube/stream`, not a sign-in |
 | GET | `/youtube/radio?id=` | Song radio (cached 1 h) |
 | GET | `/lyrics`, `/artwork/color` | Synced lyrics, artwork palette (cached 24 h) |
@@ -251,3 +253,4 @@ The suites use fakes for the database and yt-dlp, so they need no `.env` and no 
 | `SUPABASE_JWT_SECRET not configured` | Add JWT Secret from Supabase Project Settings → API |
 | `ModuleNotFoundError` | Run `pip install -r requirements.txt` with venv active |
 | `(venv)` not shown | Run `venv\Scripts\activate` first |
+| `HTTP Error 429: Too Many Requests` in the log; the app says "YouTube is busy" | YouTube is rate-limiting this server's IP. The backend pauses yt-dlp (10 s, doubling up to 5 min) and serves cached links meanwhile; the app waits instead of retrying. If it never clears, the IP itself is throttled (Render's free plan is, see `docs/DEPLOY.md`): move the backend to a host with its own IP. |

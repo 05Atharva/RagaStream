@@ -18,7 +18,8 @@ import secrets
 import shutil
 import tempfile
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import yt_dlp
@@ -27,6 +28,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from auth import get_current_user
 from schemas import YouTubeSearchResult, YouTubeStreamResponse
+from ytguard import YouTubeBusy, YtdlpLog, gate, parse_retry_after, wait_phrase
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -88,30 +90,26 @@ logging.getLogger(__name__).info(
 )
 
 
-class _YtdlpLog:
-    """Sends yt-dlp's warnings and errors to our log (they used to be silenced),
-    so a server-side failure says why: bot check, cookies, or something else."""
-
-    def debug(self, msg: str) -> None:  # yt-dlp routes info to debug too: too chatty
-        pass
-
-    def info(self, msg: str) -> None:
-        pass
-
-    def warning(self, msg: str) -> None:
-        logging.getLogger("yt-dlp").warning("%s", msg[:400])
-
-    def error(self, msg: str) -> None:
-        logging.getLogger("yt-dlp").error("%s", msg[:400])
-
 # ---------------------------------------------------------------------------
 # In-memory stream-URL cache
-# { youtube_id: { "data": {...}, "expires_at": float } }
+# { youtube_id: { "data": {...}, "fetched_at", "expires_at", "usable_until": float } }
 # ---------------------------------------------------------------------------
-CACHE_TTL_SECONDS = 30 * 60          # 30 minutes
+# Every extraction is a request YouTube counts against this server's IP, so a
+# result (stream URL plus title, channel, duration, thumbnail) is reused until
+# shortly before YouTube's own URL expiry (`expire=` in the URL, ~6h), up to 4h.
+# Past that it's still served while YouTube is rate-limiting us.
+CACHE_TTL_SECONDS = 30 * 60          # when the URL has no expiry we can read
+STREAM_CACHE_MAX_TTL = 4 * 60 * 60
+STREAM_EXPIRY_MARGIN = 30 * 60       # re-extract this long before YouTube's expiry
+STREAM_MIN_TTL = 5 * 60
+STREAM_FRESH_FLOOR = 30              # a "fresh" request reuses an extraction this young
+STREAM_CACHE_MAX_ENTRIES = 1000
 CACHE_CLEANUP_INTERVAL = 10 * 60     # 10 minutes
+# Expired search and radio results are kept this long, to serve during a rate limit.
+STALE_GRACE_SECONDS = 6 * 60 * 60
 
 _stream_cache: Dict[str, Dict[str, Any]] = {}
+_stream_inflight: Dict[str, "asyncio.Future[Dict[str, Any]]"] = {}
 
 # ---------------------------------------------------------------------------
 # Signed audio links
@@ -168,10 +166,10 @@ _search_inflight: Dict[str, "asyncio.Future[list]"] = {}
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _ydl_opts_base() -> dict:
+def _ydl_opts_base(log: Optional[YtdlpLog] = None) -> dict:
     opts: dict = {
         "quiet": True,
-        "logger": _YtdlpLog(),
+        "logger": log or YtdlpLog(),
         "extract_flat": False,
         "skip_download": True,
         # Node.js solves YouTube's signature/nsig challenges (yt-dlp-ejs).
@@ -206,19 +204,36 @@ def _duration_int(raw: Any) -> int:
 # ---------------------------------------------------------------------------
 
 async def cache_cleanup_loop() -> None:
-    """Runs forever, removing expired stream-URL cache entries every 10 min."""
+    """Runs forever, removing dead cache entries every 10 min. Expired entries are
+    kept a while first, so they can stand in while YouTube is rate-limiting us."""
     while True:
         await asyncio.sleep(CACHE_CLEANUP_INTERVAL)
-        now = time.time()
-        expired = [k for k, v in _stream_cache.items() if v["expires_at"] < now]
-        for key in expired:
-            _stream_cache.pop(key, None)
-        for key in [k for k, v in _radio_cache.items() if v["expires_at"] < now]:
-            _radio_cache.pop(key, None)
-        for key in [k for k, v in _search_cache.items() if v["expires_at"] < now]:
-            _search_cache.pop(key, None)
-        if expired:
-            logger.info("YouTube cache: evicted %d expired entries.", len(expired))
+        evicted = _evict_dead_entries(time.time())
+        if evicted:
+            logger.info("YouTube cache: evicted %d expired entries.", evicted)
+
+
+def _evict_dead_entries(now: float) -> int:
+    stale_before = now - STALE_GRACE_SECONDS
+    dead = [k for k, v in _stream_cache.items() if v["usable_until"] < now]
+    for key in dead:
+        _stream_cache.pop(key, None)
+    count = len(dead)
+    for cache in (_radio_cache, _search_cache):
+        old = [k for k, v in cache.items() if v["expires_at"] < stale_before]
+        for key in old:
+            cache.pop(key, None)
+        count += len(old)
+    return count
+
+
+def _busy_http(busy: YouTubeBusy) -> HTTPException:
+    """HTTP 429 for the app: YouTube is rate-limiting the server, so wait instead of retrying."""
+    return HTTPException(
+        status_code=429,
+        detail=f"YouTube is limiting requests from the server. Try again in {wait_phrase(busy.retry_after)}.",
+        headers={"Retry-After": str(busy.retry_after)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +256,9 @@ async def search_youtube(
 
 async def search_videos(q: str, limit: int = 8) -> List[YouTubeSearchResult]:
     """The search behind /youtube/search (30-minute cache, in-flight sharing).
-    Raises HTTPException (502/500) when YouTube fails. Shared with the playlist importer."""
+    Raises HTTPException: 429 while YouTube is rate-limiting us (older results
+    for the same query are served instead when we have them), 502/500 on other
+    failures. Shared with the playlist importer."""
     key = " ".join(q.lower().split())
     cached = _search_cache.get(key)
     if cached and cached["expires_at"] > time.time() and cached["limit"] >= limit:
@@ -259,13 +276,12 @@ async def search_videos(q: str, limit: int = 8) -> List[YouTubeSearchResult]:
         if shared is not None and len(shared) >= limit:
             return shared[:limit]
 
-    ydl_opts = {
-        **_ydl_opts_base(),
-        "extract_flat": "in_playlist",
-        "playlist_items": f"1:{limit}",
-    }
-
-    def _run_search() -> list:
+    def _run_search(log: YtdlpLog) -> list:
+        ydl_opts = {
+            **_ydl_opts_base(log),
+            "extract_flat": "in_playlist",
+            "playlist_items": f"1:{limit}",
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch{limit}:{q}", download=False)
             entries = info.get("entries", []) if info else []
@@ -292,14 +308,23 @@ async def search_videos(q: str, limit: int = 8) -> List[YouTubeSearchResult]:
     future: "asyncio.Future[list]" = loop.create_future()
     _search_inflight[key] = future
     try:
-        # yt-dlp is synchronous; run in thread pool to avoid blocking the event loop
-        results = await loop.run_in_executor(None, _run_search)
+        # yt-dlp is synchronous: the gate runs it in the thread pool, a few at a time
+        results = await gate.run(_run_search)
         future.set_result(results)
+    except YouTubeBusy as busy:
+        if cached and cached["data"]:
+            logger.info("YouTube rate limit: serving older search results for %r.", key[:60])
+            future.set_result(cached["data"])
+            return cached["data"][:limit]
+        error = _busy_http(busy)
+        future.set_exception(error)
+        future.exception()  # mark retrieved so asyncio doesn't warn when nobody else waited
+        raise error
     except yt_dlp.utils.DownloadError as exc:
         logger.error("yt-dlp search error: %s", exc)
         error = HTTPException(status_code=502, detail="YouTube search failed. Please try again.")
         future.set_exception(error)
-        future.exception()  # mark retrieved so asyncio doesn't warn when nobody else waited
+        future.exception()
         raise error
     except Exception as exc:
         logger.exception("Unexpected search error: %s", exc)
@@ -319,28 +344,53 @@ async def search_videos(q: str, limit: int = 8) -> List[YouTubeSearchResult]:
     return results
 
 
+def _shared(inflight: Dict[str, "asyncio.Task[Any]"], key: str, make: Callable[[], Awaitable[Any]]) -> "asyncio.Task[Any]":
+    """One task per key at a time: simultaneous requests for the same video share
+    one extraction. Await it through asyncio.shield, so a caller that hangs up
+    doesn't cancel it for the others (and the result still lands in the cache)."""
+    loop = asyncio.get_running_loop()
+    task = inflight.get(key)
+    if task is None or task.done() or task.get_loop() is not loop:
+        task = asyncio.ensure_future(make())
+        inflight[key] = task
+
+        def _done(t: "asyncio.Task[Any]", k: str = key) -> None:
+            if inflight.get(k) is t:
+                inflight.pop(k, None)
+            if not t.cancelled():
+                t.exception()  # retrieved: no asyncio warning if every caller left early
+
+        task.add_done_callback(_done)
+    return task
+
+
 RADIO_CACHE_TTL_SECONDS = 60 * 60   # 1 hour — mixes change slowly
 _radio_cache: Dict[str, Dict[str, Any]] = {}
+_radio_inflight: Dict[str, "asyncio.Task[Any]"] = {}
 
 
 async def fetch_mix(youtube_id: str, limit: int = 50) -> List[YouTubeSearchResult]:
     """
     YouTube's auto-generated Mix (list=RD<id>) for a seed video, seed excluded.
-    Cached for an hour. Raises yt_dlp.utils.DownloadError when YouTube refuses.
+    Cached for an hour; one fetch per seed at a time. While YouTube is
+    rate-limiting us an older Mix for the seed is served, else YouTubeBusy is
+    raised. Raises yt_dlp.utils.DownloadError when YouTube refuses.
     Shared by /youtube/radio and the recommendation graph (recs/graph.py).
     """
-    now = time.time()
     cached = _radio_cache.get(youtube_id)
-    if cached and cached["expires_at"] > now:
+    if cached and cached["expires_at"] > time.time():
         return cached["data"][:limit]
+    task = _shared(_radio_inflight, youtube_id, lambda: _fetch_mix_live(youtube_id))
+    return (await asyncio.shield(task))[:limit]
 
-    ydl_opts = {
-        **_ydl_opts_base(),
-        "extract_flat": "in_playlist",
-        "playlistend": 50,
-    }
 
-    def _run_radio() -> list:
+async def _fetch_mix_live(youtube_id: str) -> List[YouTubeSearchResult]:
+    def _run_radio(log: YtdlpLog) -> list:
+        ydl_opts = {
+            **_ydl_opts_base(log),
+            "extract_flat": "in_playlist",
+            "playlistend": 50,
+        }
         url = f"https://www.youtube.com/watch?v={youtube_id}&list=RD{youtube_id}"
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -362,9 +412,15 @@ async def fetch_mix(youtube_id: str, limit: int = 50) -> List[YouTubeSearchResul
                 )
             return results
 
-    results = await asyncio.get_event_loop().run_in_executor(None, _run_radio)
-    _radio_cache[youtube_id] = {"data": results, "expires_at": now + RADIO_CACHE_TTL_SECONDS}
-    return results[:limit]
+    try:
+        results = await gate.run(_run_radio)
+    except YouTubeBusy:
+        stale = _radio_cache.get(youtube_id)
+        if stale and stale["data"]:
+            return stale["data"]
+        raise
+    _radio_cache[youtube_id] = {"data": results, "expires_at": time.time() + RADIO_CACHE_TTL_SECONDS}
+    return results
 
 
 @router.get("/radio", response_model=List[YouTubeSearchResult])
@@ -380,6 +436,8 @@ async def get_radio(
     """
     try:
         return await fetch_mix(id, limit)
+    except YouTubeBusy as busy:
+        raise _busy_http(busy)
     except yt_dlp.utils.DownloadError as exc:
         logger.error("yt-dlp radio error for %s: %s", id, exc)
         raise HTTPException(status_code=502, detail="Could not build radio for this song.")
@@ -405,23 +463,69 @@ def _ydl_error_to_http(video_id: str, exc: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail="Could not fetch stream URL.")
 
 
+def _url_expiry(url: str) -> Optional[float]:
+    """YouTube's own expiry for a stream URL (unix seconds, the `expire` param)."""
+    try:
+        return float(parse_qs(urlparse(url).query)["expire"][0])
+    except (KeyError, IndexError, ValueError):
+        return None
+
+
+def _cache_stream(video_id: str, data: Dict[str, Any], now: float) -> Dict[str, Any]:
+    expiry = _url_expiry(data.get("stream_url", ""))
+    if expiry:
+        usable_until = expiry - 60
+        ttl = min(STREAM_CACHE_MAX_TTL, expiry - now - STREAM_EXPIRY_MARGIN)
+        ttl = max(ttl, min(STREAM_MIN_TTL, usable_until - now))  # short-lived URL: use what's left
+    else:
+        ttl = CACHE_TTL_SECONDS
+        usable_until = now + ttl
+    if video_id not in _stream_cache and len(_stream_cache) >= STREAM_CACHE_MAX_ENTRIES:
+        _stream_cache.pop(next(iter(_stream_cache)))  # oldest insertion first
+    entry = {"data": data, "fetched_at": now, "expires_at": now + ttl, "usable_until": max(usable_until, now + ttl)}
+    _stream_cache[video_id] = entry
+    return entry
+
+
 async def _resolve_stream(video_id: str, fresh: bool = False) -> Dict[str, Any]:
     """
-    Extract (or reuse from the 30-minute cache) the best audio-only stream for
-    a video: URL, the request headers YouTube expects, size and container.
+    Extract (or reuse from cache) the best audio-only stream for a video: URL,
+    the request headers YouTube expects, size, container, title and artwork.
+    Cached until shortly before YouTube's URL expiry; `fresh` skips the cache
+    unless the cached extraction is only seconds old. Simultaneous calls for
+    one video share one extraction. While YouTube is rate-limiting us, a cached
+    URL that hasn't expired yet is served; otherwise HTTP 429.
     """
     now = time.time()
-    cached = None if fresh else _stream_cache.get(video_id)
-    if cached and cached["expires_at"] > now:
+    cached = _stream_cache.get(video_id)
+    if cached and now - cached["fetched_at"] < STREAM_FRESH_FLOOR:
+        fresh = False  # just extracted: as fresh as it gets, don't ask YouTube again
+    if cached and not fresh and cached["expires_at"] > now:
         return {**cached["data"], "expires_in": int(cached["expires_at"] - now)}
 
-    ydl_opts = {
-        **_ydl_opts_base(),
-        # Best audio-only; fall back to best combined if no audio-only available
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-    }
+    task = _shared(_stream_inflight, video_id, lambda: _extract_stream(video_id))
+    try:
+        return await asyncio.shield(task)
+    except YouTubeBusy as busy:
+        now = time.time()
+        if cached and not fresh and cached["usable_until"] > now:
+            logger.info("YouTube rate limit: reusing an older stream URL for %s.", video_id)
+            return {**cached["data"], "expires_in": int(cached["usable_until"] - now)}
+        raise _busy_http(busy)
+    except yt_dlp.utils.DownloadError as exc:
+        raise _ydl_error_to_http(video_id, exc)
+    except Exception as exc:
+        logger.exception("Unexpected stream error for %s: %s", video_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error.")
 
-    def _extract() -> dict:
+
+async def _extract_stream(video_id: str) -> Dict[str, Any]:
+    def _extract(log: YtdlpLog) -> dict:
+        ydl_opts = {
+            **_ydl_opts_base(log),
+            # Best audio-only; fall back to best combined if no audio-only available
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
             if info is None:
@@ -444,16 +548,10 @@ async def _resolve_stream(video_id: str, fresh: bool = False) -> Dict[str, Any]:
                 "http_headers": info.get("http_headers") or {},
             }
 
-    try:
-        data = await asyncio.get_event_loop().run_in_executor(None, _extract)
-    except yt_dlp.utils.DownloadError as exc:
-        raise _ydl_error_to_http(video_id, exc)
-    except Exception as exc:
-        logger.exception("Unexpected stream error for %s: %s", video_id, exc)
-        raise HTTPException(status_code=500, detail="Internal server error.")
-
-    _stream_cache[video_id] = {"data": data, "expires_at": now + CACHE_TTL_SECONDS}
-    return {**data, "expires_in": CACHE_TTL_SECONDS}
+    data = await gate.run(_extract)
+    now = time.time()
+    entry = _cache_stream(video_id, data, now)
+    return {**data, "expires_in": int(entry["expires_at"] - now)}
 
 
 @router.get("/stream", response_model=YouTubeStreamResponse)
@@ -464,9 +562,11 @@ async def get_stream_url(
 ):
     """
     Check a song is playable (warming the extraction cache) and return a signed
-    relay link for it. Extraction is cached for 30 minutes; `fresh=true` forces
-    a new one. The raw YouTube URL never leaves the server: it only works from
-    this server's IP anyway.
+    relay link for it. Extraction is cached until shortly before YouTube's URL
+    expiry (up to 4h); `fresh=true` forces a new one. HTTP 429 + Retry-After
+    while YouTube is rate-limiting the server: wait, don't retry straight away.
+    The raw YouTube URL never leaves the server: it only works from this
+    server's IP anyway.
     """
     data = await _resolve_stream(id, fresh)
     return YouTubeStreamResponse(
@@ -484,6 +584,8 @@ async def get_stream_url(
 # ---------------------------------------------------------------------------
 
 RELAY_CHUNK = 1024 * 1024  # YouTube serves 1 MB ranged reads reliably
+RELAY_MAX_WAITS = 3            # 429/5xx on a chunk: retries before giving up
+RELAY_MAX_WAIT_SECONDS = 8     # never hold a chunk longer than this per retry
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 _MIME = {"m4a": "audio/mp4", "mp4": "audio/mp4", "webm": "audio/webm", "opus": "audio/ogg"}
 
@@ -551,6 +653,7 @@ async def relay_audio(
         source = data
         position = start
         retried = False
+        waits = 0
         async with httpx.AsyncClient(headers=source["http_headers"], timeout=20, follow_redirects=True) as client:
             while position <= end:
                 if await request.is_disconnected():
@@ -561,7 +664,18 @@ async def relay_audio(
                 except httpx.HTTPError as exc:
                     logger.warning("Relay read failed for %s at %d: %s", video_id, position, exc)
                     resp = None
-                if resp is None or resp.status_code in (403, 404, 410) or not resp.content:
+                if resp is not None and (resp.status_code == 429 or resp.status_code >= 500):
+                    # YouTube is busy, not refusing this URL: wait a moment and read
+                    # the same range again. A new extraction would only add load.
+                    if waits >= RELAY_MAX_WAITS:
+                        logger.error("Relay giving up on %s at byte %d: YouTube answered %d",
+                                     video_id, position, resp.status_code)
+                        return
+                    waits += 1
+                    delay = parse_retry_after(resp.headers.get("retry-after")) or float(2 ** waits)
+                    await asyncio.sleep(min(delay, RELAY_MAX_WAIT_SECONDS))
+                    continue
+                if resp is None or resp.status_code not in (200, 206) or not resp.content:
                     if retried:
                         logger.error("Relay giving up on %s at byte %d", video_id, position)
                         return
@@ -574,6 +688,7 @@ async def relay_audio(
                     client.headers.update(source["http_headers"])
                     continue
                 retried = False
+                waits = 0
                 yield resp.content
                 position += len(resp.content)
 
